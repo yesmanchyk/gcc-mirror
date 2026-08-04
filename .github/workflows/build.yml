@@ -1,0 +1,31 @@
+name: Compile GCC
+
+on:
+  push:
+    branches: [ "no_expression_kind" ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential flex bison libgmp-dev libmpfr-dev libmpc-dev texinfo zlib1g-dev
+
+      - name: Configure GCC
+        run: |
+          mkdir build
+          cd build
+          ../configure --enable-languages=c,c++ --disable-bootstrap --disable-multilib
+
+      - name: Build GCC
+        run: |
+          cd build
+          make -j$(nproc)

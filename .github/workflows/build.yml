@@ -29,3 +29,9 @@ jobs:
         run: |
           cd build
           make -j$(nproc)
+
+      - name: Test Reflection
+        run: |
+          cd build/gcc
+          make check-g++ RUNTESTFLAGS="dg.exp=reflect/*.C"
+          

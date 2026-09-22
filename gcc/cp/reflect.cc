@@ -3319,6 +3319,9 @@ eval_statements_of (location_t loc, const constexpr_ctx *ctx, tree r,
 	r = EXPR_STMT_EXPR (r);
     }
 
+  if (r && TREE_CODE (r) == DEBUG_BEGIN_STMT)
+    return get_vector_of_info_elts (nullptr);
+
   vec<constructor_elt, va_gc> *elts = nullptr;
 
   if (r)
@@ -3329,6 +3332,9 @@ eval_statements_of (location_t loc, const constexpr_ctx *ctx, tree r,
 	    {
 	      if (stmt)
 		{
+		  if (TREE_CODE (stmt) == DEBUG_BEGIN_STMT)
+		    continue;
+
 		  tree unwrapped = stmt;
 		  while (unwrapped && (TREE_CODE (unwrapped) == BIND_EXPR
 				       || TREE_CODE (unwrapped) == CLEANUP_POINT_EXPR
@@ -3343,6 +3349,9 @@ eval_statements_of (location_t loc, const constexpr_ctx *ctx, tree r,
 		    }
 		  if (unwrapped)
 		    {
+		      if (TREE_CODE (unwrapped) == DEBUG_BEGIN_STMT)
+			continue;
+
 		      if (TREE_CODE (unwrapped) == INIT_EXPR
 			  && TREE_OPERAND_LENGTH (unwrapped) > 0
 			  && VAR_P (TREE_OPERAND (unwrapped, 0))

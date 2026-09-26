@@ -53,9 +53,6 @@ vec<sel_region_bb_info_def> sel_region_bb_info;
 /* A pool for allocating all lists.  */
 object_allocator<_list_node> sched_lists_pool ("sel-sched-lists");
 
-/* This contains information about successors for compute_av_set.  */
-struct succs_info current_succs;
-
 /* Data structure to describe interaction with the generic scheduler utils.  */
 static struct common_sched_info_def sel_common_sched_info;
 
@@ -3396,6 +3393,10 @@ has_dependence_p (expr_t expr, insn_t pred, ds_t **has_dep_pp)
 
   dc = &INSN_DEPS_CONTEXT (pred);
 
+  /* Selective scheduling keeps the eager barrier form, so the reg_last entries
+     the callbacks below read are always materialised.  */
+  gcc_checking_assert (!dc->pending_barriers);
+
   /* We init this field lazily.  */
   if (dc->reg_last == NULL)
     init_deps_reg_last (dc);
@@ -4462,27 +4463,6 @@ exchange_data_sets (basic_block to, basic_block from)
   /* Exchange av sets of TO and FROM.  */
   std::swap (BB_AV_SET (from), BB_AV_SET (to));
   std::swap (BB_AV_LEVEL (from), BB_AV_LEVEL (to));
-}
-
-/* Copy data sets of FROM to TO.  */
-void
-copy_data_sets (basic_block to, basic_block from)
-{
-  gcc_assert (!BB_LV_SET_VALID_P (to) && !BB_AV_SET_VALID_P (to));
-  gcc_assert (BB_AV_SET (to) == NULL);
-
-  BB_AV_LEVEL (to) = BB_AV_LEVEL (from);
-  BB_LV_SET_VALID_P (to) = BB_LV_SET_VALID_P (from);
-
-  if (BB_AV_SET_VALID_P (from))
-    {
-      BB_AV_SET (to) = av_set_copy (BB_AV_SET (from));
-    }
-  if (BB_LV_SET_VALID_P (from))
-    {
-      gcc_assert (BB_LV_SET (to) != NULL);
-      COPY_REG_SET (BB_LV_SET (to), BB_LV_SET (from));
-    }
 }
 
 /* Return an av set for INSN, if any.  */

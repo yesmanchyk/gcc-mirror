@@ -375,6 +375,12 @@ if test x$enable_caf_shmem = xtrue; then
      enable_caf_shmem=false])
   CFLAGS="$save_CFLAGS"
 fi
+case ${host} in
+  *-*-darwin[[89]]* | *-*-darwin10*)
+    # These versions define PTHREAD_PROCESS_SHARED but the functionality
+    # is not available at runtime, so the configure check misleads.
+    enable_caf_shmem=false;;
+esac
 AM_CONDITIONAL([ENABLE_CAF_SHMEM], [test x$enable_caf_shmem = xtrue])
 
 # Check strerror_r, cannot be above as versions with two and three arguments exist
@@ -470,6 +476,7 @@ GCC_CHECK_MATH_FUNC([nextafter])
 GCC_CHECK_MATH_FUNC([nextafterl])
 GCC_CHECK_MATH_FUNC([powf])
 GCC_CHECK_MATH_FUNC([pow])
+GCC_CHECK_MATH_FUNC([powl])
 GCC_CHECK_MATH_FUNC([cpowf])
 GCC_CHECK_MATH_FUNC([cpow])
 GCC_CHECK_MATH_FUNC([cpowl])
@@ -520,6 +527,7 @@ GCC_CHECK_MATH_FUNC([trunc])
 GCC_CHECK_MATH_FUNC([truncl])
 GCC_CHECK_MATH_FUNC([erff])
 GCC_CHECK_MATH_FUNC([erf])
+GCC_CHECK_MATH_FUNC([erfl])
 GCC_CHECK_MATH_FUNC([erfcf])
 GCC_CHECK_MATH_FUNC([erfc])
 GCC_CHECK_MATH_FUNC([erfcl])

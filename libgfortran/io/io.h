@@ -37,6 +37,9 @@ see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
 /* Used for building error message strings.  */
 #define IOMSG_LEN 256
 
+/* Size of the namelist read error message buffer.  */
+#define NML_ERR_MSG_LEN 200
+
 /* POSIX 2008 specifies that the extended locale stuff is found in
    locale.h, but some systems have them in xlocale.h.  */
 
@@ -535,7 +538,7 @@ typedef struct st_parameter_dt
 	     character string is being read so don't use commas to shorten a
 	     formatted field width.  */
 	  unsigned sf_read_comma : 1;
-	  /* A namelist specific flag used to enable reading input from 
+	  /* A namelist specific flag used to enable reading input from
 	     line_buffer for logical reads.  */
 	  unsigned line_buffer_enabled : 1;
 	  /* An internal unit specific flag used to identify that the associated
@@ -553,7 +556,10 @@ typedef struct st_parameter_dt
 	  unsigned expanded_read : 1;
 	  /* Flag to indicate if the statement has async="YES". */
 	  unsigned async : 1;
-	  /* 12 unused bits.  */
+	  /* A namelist specific flag set when a read error message has
+	     been saved into the unit's nml_err_msg buffer.  */
+	  unsigned nml_err_pending : 1;
+	  /* 11 unused bits.  */
 
 	  int child_saved_iostat;
 	  int nml_delim;
@@ -649,7 +655,7 @@ typedef struct gfc_unit
 {
   int unit_number;
   stream *s;
-  
+
   /* Treap links.  */
   struct gfc_unit *left, *right;
   int priority;
@@ -658,6 +664,10 @@ typedef struct gfc_unit
 
   /* Position information for better diagnostics.  */
   int line_number, column_number;
+
+  /* Error message buffer used while a namelist read is in progress.  Valid
+     only when the transfer's nml_err_pending flag is set.  */
+  char nml_err_msg[NML_ERR_MSG_LEN];
 
   enum
   { NO_ENDFILE, AT_ENDFILE, AFTER_ENDFILE }
@@ -709,10 +719,10 @@ typedef struct gfc_unit
 
   /* The format hash table.  */
   struct format_hash_entry format_hash_table[FORMAT_HASH_SIZE];
-  
+
   /* Formatting buffer.  */
   struct fbuf *fbuf;
-  
+
   /* Function pointer, points to list_read worker functions.  */
   int (*next_char_fn_ptr) (st_parameter_dt *);
   void (*push_char_fn_ptr) (st_parameter_dt *, int);
@@ -722,6 +732,9 @@ typedef struct gfc_unit
   gfc_charlen_type internal_unit_len;
   gfc_array_char *string_unit_desc;
   int internal_unit_kind;
+
+  /* Track when a gfc_unit is reserved for an internal unit.  */
+  bool internal_reserved;
 
   /* DTIO Parent/Child procedure, 0 = parent, >0 = child level.  */
   int child_dtio;
@@ -1023,7 +1036,7 @@ predec_waiting_locked (gfc_unit *u)
 
      if (predec_waiting_locked (u) == 0)
          // destroy u
-	 
+
      could be further optimized by making this be an __ATOMIC_RELEASE,
      and then inserting a
 

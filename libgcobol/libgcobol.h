@@ -39,28 +39,6 @@
     Some are also called between source code modules in libgcobol, hence the
     need here for declarations. */
 
-// The runtime might be on a little-endian machine, and it might be on a
-// big-endian machine, most notably the IBM S390 series.
-
-#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-# define COBOL_BIG_ENDIAN 1
-# define COBOL_LITTLE_ENDIAN 0
-#elif defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-# define COBOL_BIG_ENDIAN 0
-# define COBOL_LITTLE_ENDIAN 1
-
-#elif defined(__BIG_ENDIAN__) || defined(_BIG_ENDIAN)
-# define COBOL_BIG_ENDIAN 1
-# define COBOL_LITTLE_ENDIAN 0
-#elif defined(__LITTLE_ENDIAN__) || defined(_LITTLE_ENDIAN)
-# define COBOL_BIG_ENDIAN 0
-# define COBOL_LITTLE_ENDIAN 1
-
-//#else
-cppcheck-suppress preprocessorErrorDirective
-# error "Unknown byte order" 
-#endif
-
 extern void __gg__mabort();
 
 // The unnecessary abort() that follows is necessary to make cppcheck be
@@ -100,13 +78,12 @@ extern "C" void __gg__float128_to_field(cblc_field_t   *tgt,
                                         GCOB_FP128       value,
                                         enum cbl_round_t  rounded,
                                       int            *compute_error);
-extern "C" void __gg__int128_to_qualified_field(cblc_field_t   *tgt,
-                                size_t          offset,
-                                size_t          length,
-                                __int128        value,
-                                int             source_rdigits,
-                                enum cbl_round_t  rounded,
-                                int            *compute_error);
+extern "C" int __gg__int128_to_qualified_field(cblc_field_t   *tgt,
+                                             size_t          offset,
+                                             size_t          length,
+                                             __int128        value,
+                                             int             source_rdigits,
+                                             enum cbl_round_t  rounded);
 extern "C" void __gg__float128_to_qualified_field(cblc_field_t   *tgt,
                                   size_t          tgt_offset,
                                   GCOB_FP128       value,
@@ -127,6 +104,12 @@ struct cbl_timespec
   long    tv_nsec;   // Nanoseconds.
   } ;
 
+typedef struct int128
+  {
+  __int128 i128;
+  int      rdigits;
+  } int128;
+
 extern "C" void __gg__clock_gettime(struct cbl_timespec *tp);
 
 extern "C" GCOB_FP128 __gg__float128_from_location(
@@ -138,10 +121,13 @@ extern "C" void __gg__realloc_if_necessary( char **dest,
                                             size_t *dest_size,
                                             size_t new_size);
 extern "C" void __gg__set_exception_file(const cblc_file_t *file);
-extern "C" __int128 __gg__binary_value_from_qualified_field(int     *rdigits,
-                                                            const cblc_field_t *var,
-                                                            size_t     offset,
-                                                            size_t     size);
+__int128 __gg__int128_from_qualified_field(const cblc_field_t *var,
+                                           size_t              offset,
+                                           size_t              size);
+__int128 __gg__int128_from_qualified_field(struct int128      &i128,
+                                           const cblc_field_t *var,
+                                           size_t              offset,
+                                           size_t              size);
 extern "C"  GCOB_FP128 __gg__float128_from_qualified_field(const cblc_field_t *field,
                                                           size_t offset,
                                                           size_t size);
@@ -166,5 +152,17 @@ extern "C"
 void *__gg__memdup(const void *p, size_t size);
 
 enum {width_of_utf32 = 4};
+
+extern "C" __int128 __gg__int128_to_int128_rounded( cbl_round_t rounded,
+                                                    __int128    value,
+                                                    __int128    factor,
+                                                    int        *compute_error);
+
+extern "C" int __gg__move_literala( cblc_field_t *field,
+                                    size_t        field_offset,
+                                    size_t        field_size,
+                                    cbl_round_t   rounded_,
+                                    const char   *str,
+                                    size_t        strlen );
 
 #endif

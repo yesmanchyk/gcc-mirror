@@ -28,6 +28,7 @@
 #include "rust-finalized-name-resolution-context.h"
 #include "rust-rib.h"
 #include "rust-system.h"
+#include "rust-tyty.h"
 
 namespace Rust {
 namespace Analysis {
@@ -153,6 +154,21 @@ MarkLive::visit (HIR::MethodCallExpr &expr)
 bool
 MarkLive::visit_path_segment (HIR::PathExprSegment seg)
 {
+  if (seg.has_generic_args ())
+    {
+      for (auto &type : seg.get_generic_args ().get_type_args ())
+	{
+	  NodeId node_id = type->get_mappings ().get_nodeid ();
+
+	  if (auto resolved
+	      = resolver.lookup (node_id, Resolver2_0::Namespace::Types))
+	    {
+	      if (auto hid = mappings.lookup_node_to_hir (*resolved))
+		mark_hir_id (*hid);
+	    }
+	}
+    }
+
   NodeId ast_node_id = seg.get_mappings ().get_nodeid ();
   NodeId ref_node_id = UNKNOWN_NODEID;
 
@@ -199,6 +215,12 @@ MarkLive::visit (HIR::FieldAccessExpr &expr)
   if (receiver->get_kind () == TyTy::TypeKind::ADT)
     {
       adt = static_cast<TyTy::ADTType *> (receiver);
+
+      if (auto inner_ty = TyTy::try_get_box_inner_type (receiver))
+	{
+	  rust_assert ((*inner_ty)->get_kind () == TyTy::TypeKind::ADT);
+	  adt = static_cast<TyTy::ADTType *> (*inner_ty);
+	}
     }
   else if (receiver->get_kind () == TyTy::TypeKind::REF)
     {

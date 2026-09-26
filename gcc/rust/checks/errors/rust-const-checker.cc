@@ -460,16 +460,15 @@ ConstChecker::visit (RangeFullExpr &)
 {}
 
 void
-ConstChecker::visit (RangeFromToInclExpr &expr)
-{
-  expr.get_from_expr ().accept_vis (*this);
-  expr.get_to_expr ().accept_vis (*this);
-}
-
-void
 ConstChecker::visit (RangeToInclExpr &)
 {
   // FIXME: Visit to_expr
+}
+
+void
+ConstChecker::visit (BoxExpr &expr)
+{
+  expr.get_expr ().accept_vis (*this);
 }
 
 void

@@ -1058,8 +1058,20 @@ show_attr (symbol_attribute *attr, const char * module)
       gfc_internal_error ("Wrong value for value_set");
     }
 
-  if (attr->allocated)
-    fputs (" ALLOCATED", dumpfile);
+  switch (attr->allocated)
+    {
+    case ALLOCATED_ARG:
+      fputs (" ALLOCATED(ARG)", dumpfile);
+      break;
+    case ALLOCATED_ALLOCATE_STMT:
+      fputs(" ALLOCATED(ALLOCATE-STMT)", dumpfile);
+      break;
+    case ALLOCATED_ASSIGNMENT:
+      fputs (" ALLOCATED(ASSIGNMENT)", dumpfile);
+      break;
+    default:
+      break;
+    }
 
   switch (attr->value_used)
     {
@@ -1886,10 +1898,24 @@ show_omp_clauses (gfc_omp_clauses *omp_clauses)
       show_expr (omp_clauses->final_expr);
       fputc (')', dumpfile);
     }
-  if (omp_clauses->num_threads)
+  if (omp_clauses->num_threads_list)
     {
       fputs (" NUM_THREADS(", dumpfile);
-      show_expr (omp_clauses->num_threads);
+      if (omp_clauses->num_threads_strict)
+	fputs ("STRICT", dumpfile);
+      if (omp_clauses->num_threads_strict && omp_clauses->num_threads_dims)
+	fputc (',', dumpfile);
+      if (omp_clauses->num_threads_dims)
+	fputs ("DIMS()", dumpfile);
+      if (omp_clauses->num_threads_strict || omp_clauses->num_threads_dims)
+	fputc (':', dumpfile);
+      gfc_expr_list *nt;
+      for (nt = omp_clauses->num_threads_list; nt; nt = nt->next)
+	{
+	  show_expr (nt->expr);
+	  if (nt->next)
+	    fputs (", ", dumpfile);
+	}
       fputc (')', dumpfile);
     }
   if (omp_clauses->async)
@@ -2187,15 +2213,29 @@ show_omp_clauses (gfc_omp_clauses *omp_clauses)
 	}
       fprintf (dumpfile, " BIND(%s)", type);
     }
-  if (omp_clauses->num_teams_upper)
+  if (omp_clauses->num_teams_list)
     {
       fputs (" NUM_TEAMS(", dumpfile);
-      if (omp_clauses->num_teams_lower)
+      if (omp_clauses->num_teams_dims)
 	{
-	  show_expr (omp_clauses->num_teams_lower);
-	  fputc (':', dumpfile);
+	  fputs ("DIMS():", dumpfile);
+	  gfc_expr_list *nt;
+	  for (nt = omp_clauses->num_teams_list; nt; nt = nt->next)
+	   {
+	     show_expr (nt->expr);
+	     if (nt->next)
+	       fputs (", ", dumpfile);
+	   }
 	}
-      show_expr (omp_clauses->num_teams_upper);
+      else
+	{
+	  show_expr (omp_clauses->num_teams_list->expr);
+	  if (omp_clauses->num_teams_list->next)
+	    {
+	      fputc (':', dumpfile);
+	      show_expr (omp_clauses->num_teams_list->next->expr);
+	    }
+	}
       fputc (')', dumpfile);
     }
   if (omp_clauses->device)
@@ -2206,10 +2246,24 @@ show_omp_clauses (gfc_omp_clauses *omp_clauses)
       show_expr (omp_clauses->device);
       fputc (')', dumpfile);
     }
-  if (omp_clauses->thread_limit)
+  if (omp_clauses->thread_limit_list)
     {
       fputs (" THREAD_LIMIT(", dumpfile);
-      show_expr (omp_clauses->thread_limit);
+      if (omp_clauses->thread_limit_strict)
+	fputs ("STRICT", dumpfile);
+      if (omp_clauses->thread_limit_strict && omp_clauses->thread_limit_dims)
+	fputc (',', dumpfile);
+      if (omp_clauses->thread_limit_dims)
+	fputs ("DIMS()", dumpfile);
+      if (omp_clauses->thread_limit_strict || omp_clauses->thread_limit_dims)
+	fputc (':', dumpfile);
+      gfc_expr_list *nt;
+      for (nt = omp_clauses->thread_limit_list; nt; nt = nt->next)
+	{
+	  show_expr (nt->expr);
+	  if (nt->next)
+	    fputs (", ", dumpfile);
+	}
       fputc (')', dumpfile);
     }
   if (omp_clauses->dist_sched_kind != OMP_SCHED_NONE)
@@ -2402,7 +2456,7 @@ show_omp_clauses (gfc_omp_clauses *omp_clauses)
     }
   if (omp_clauses->message)
     {
-      fputs (" ERROR (", dumpfile);
+      fputs (" MESSAGE (", dumpfile);
       show_expr (omp_clauses->message);
       fputc (')', dumpfile);
     }
@@ -2440,6 +2494,28 @@ show_omp_clauses (gfc_omp_clauses *omp_clauses)
       show_expr (omp_clauses->nocontext);
       fputc (')', dumpfile);
     }
+  if (omp_clauses->oacc_device_type_present)
+    {
+      const char *s;
+      switch (omp_clauses->oacc_device_type)
+	{
+	case GOMP_DEVICE_NONE: s = "all"; break;
+	case GOMP_DEVICE_HOST: s = "host"; break;
+	case GOMP_DEVICE_NVIDIA_PTX: s = "nvidia"; break;
+	case GOMP_DEVICE_GCN: s = "radeon"; break;
+	default:
+	  gcc_unreachable ();
+	}
+      fputs (" DEVICE_TYPE(", dumpfile);
+      fputs (s, dumpfile);
+      fputc (')', dumpfile);
+    }
+  if (omp_clauses->device_num_expr)
+    {
+      fputs (" DEVICE_NUM(", dumpfile);
+      show_expr (omp_clauses->device_num_expr);
+      fputc (')', dumpfile);
+    }
 }
 
 /* Show a single OpenMP or OpenACC directive node and everything underneath it
@@ -2469,6 +2545,9 @@ show_omp_node (int level, gfc_code *c)
     case EXEC_OACC_CACHE: name = "CACHE"; is_oacc = true; break;
     case EXEC_OACC_ENTER_DATA: name = "ENTER DATA"; is_oacc = true; break;
     case EXEC_OACC_EXIT_DATA: name = "EXIT DATA"; is_oacc = true; break;
+    case EXEC_OACC_INIT: name = "INIT"; is_oacc = true; break;
+    case EXEC_OACC_SHUTDOWN: name = "SHUTDOWN"; is_oacc = true; break;
+    case EXEC_OACC_SET: name = "SET"; is_oacc = true; break;
     case EXEC_OMP_ALLOCATE: name = "ALLOCATE"; break;
     case EXEC_OMP_ALLOCATORS: name = "ALLOCATORS"; break;
     case EXEC_OMP_ASSUME: name = "ASSUME"; break;
@@ -2580,6 +2659,9 @@ show_omp_node (int level, gfc_code *c)
     case EXEC_OACC_CACHE:
     case EXEC_OACC_ENTER_DATA:
     case EXEC_OACC_EXIT_DATA:
+    case EXEC_OACC_INIT:
+    case EXEC_OACC_SHUTDOWN:
+    case EXEC_OACC_SET:
     case EXEC_OMP_ALLOCATE:
     case EXEC_OMP_ALLOCATORS:
     case EXEC_OMP_ASSUME:
@@ -3395,6 +3477,13 @@ show_code_node (int level, gfc_code *c)
 
     case EXEC_ALLOCATE:
       fputs ("ALLOCATE ", dumpfile);
+
+      if (c->ext.alloc.ts.type != BT_UNKNOWN)
+	{
+	  show_typespec (&c->ext.alloc.ts);
+	  fputs (":: ", dumpfile);
+	}
+
       if (c->expr1)
 	{
 	  fputs (" STAT=", dumpfile);
@@ -3970,6 +4059,9 @@ show_code_node (int level, gfc_code *c)
     case EXEC_OACC_CACHE:
     case EXEC_OACC_ENTER_DATA:
     case EXEC_OACC_EXIT_DATA:
+    case EXEC_OACC_INIT:
+    case EXEC_OACC_SHUTDOWN:
+    case EXEC_OACC_SET:
     case EXEC_OMP_ALLOCATE:
     case EXEC_OMP_ALLOCATORS:
     case EXEC_OMP_ASSUME:

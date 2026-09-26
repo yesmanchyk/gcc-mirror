@@ -3251,7 +3251,9 @@ lookup_destructor (tree object, tree scope, tree dtor_name,
     }
   expr = lookup_member (dtor_type, complete_dtor_identifier,
 			/*protect=*/1, /*want_type=*/false,
-			tf_warning_or_error);
+			complain);
+  if (expr == error_mark_node)
+    return error_mark_node;
   if (!expr)
     {
       if (complain & tf_error)
@@ -6387,7 +6389,7 @@ cp_build_binary_op (const op_location_t &location,
 	}
       /* [expr.eq]: "If both operands are of type std::meta::info,
 	 comparison is defined as follows..."  */
-      else if (code0 == META_TYPE && code1 == META_TYPE)
+      else if (REFLECTION_TYPE_P (type0) && REFLECTION_TYPE_P (type1))
 	result_type = type0;
       else
 	{
@@ -11581,6 +11583,11 @@ check_return_expr (tree retval, bool *no_warning, bool *dangling)
 
   if (processing_template_decl)
     {
+      /* If in expansion statement body, we don't know if the body
+	 will be instantiated at all.  */
+      if (in_expansion_stmt)
+	goto dependent;
+
       current_function_returns_value = 1;
 
       if (check_for_bare_parameter_packs (retval))
@@ -11892,12 +11899,6 @@ check_return_expr (tree retval, bool *no_warning, bool *dangling)
 	       && maybe_warn_about_returning_address_of_local (retval, loc)
 	       && INDIRECT_TYPE_P (valtype))
 	*dangling = true;
-    }
-
-  if (check_out_of_consteval_use (retval))
-    {
-      current_function_return_value = error_mark_node;
-      return error_mark_node;
     }
 
   /* A naive attempt to reduce the number of -Wdangling-reference false

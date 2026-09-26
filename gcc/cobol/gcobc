@@ -86,31 +86,6 @@ then
     copydir="-I$COB_COPY_DIR"
 fi
 
-# TODO: this file likely needs to query gcobol for its shared path instead
-udf_default="${0%/*}/../share/gcobol/udf"
-if [ ! -d "$udfdir" ]
-then
-   # the one above is the installed one from the packages this one was previously used
-   udf_default="${0%/*}/../share/cobol/udf"
-fi
-udfdir="${GCOBCUDF:-$udf_default}"
-
-if [ -d "$udfdir" ]
-then
-    for F in "$udfdir"/*
-    do
-        if [ -f "$F" ]
-        then
-            includes="$includes -include $F "
-        fi
-    done
-else
-    if [ "${GCOBCUDF:-none}" != "none" ]
-    then
-        echo warning: no such directory: "'$GCOBCUDF'"
-    fi
-fi
-
 exit_status=0
 skip_arg=
 opts="$copydir $includes"
@@ -173,8 +148,6 @@ EOF
 }
 
 dialect="mf gnu"
-out_set=""
-first=""
 
 #
 # Iterate over the command-line tokens.  We can't use getopts here
@@ -235,8 +208,6 @@ do
             opt="$(echo "$opt" | sed -E 's/-f(no-)?ec=/-f\1cobol-exceptions=EC-/g')"
              opts="$opts $opt"
              ;;
-        -fno-ec=*)
-             ;;  # just ignore for now to work around "sorry unimplemented" errors
          -ext)
             pending_arg="-copyext "
              ;;
@@ -515,7 +486,8 @@ do
                        ;;
          -v | --verbose) opts="$opts -V"
                          ;;
-         # note: we want -dumpversion to be passed to gcc
+         # -dumpversion, like all options not handled specifically, is
+         # passed by default.
          -V | --version | -version)
              $gcobol --version |
                  awk '1 == NR { ver = $3; 
@@ -524,12 +496,9 @@ do
              exit
              # opts="$opts --version"
             ;;
-        # pass through, strangely -Wall is not supported
-        # note that cobc does not support gcc's -Wl options, but they
-        # might be passed anyway for different reasons e.g.: -Wl,rpath.
-        -w | -W | -Wextra | -Wl,*) opts="$opts $opt"
-             ;;
-        -Wno-*) no_warn "$opt"
+        # pass through, -Wall support pending gcc to set for all front ends
+        # cobc does not support all gcc -Wl options
+        -w | -W | -Wextra | -Wno-* | -Wl,*) opts="$opts $opt"
              ;;
 
         -W*) warn "$opt"
@@ -554,7 +523,7 @@ do
                        output_name="$output_name".so
                        ;;
                esac
-               opts="$opts $cflags -o $output_name"
+               opts="$opts -o $output_name"
            fi    
            opts="$opts $opt" # pass through
            ;;
@@ -588,4 +557,4 @@ then
     set -x
 fi
 
-exec $gcobol $mode $dialect $opts
+exec $gcobol $mode $dialect $cflags $opts

@@ -429,6 +429,9 @@ TokenCollector::visit (Token &tok)
     case RAW_STRING_LITERAL:
       push (Rust::Token::make_raw_string (tok.get_locus (), std::move (data)));
       break;
+    case C_STRING_LITERAL:
+      push (Rust::Token::make_c_string (tok.get_locus (), std::move (data)));
+      break;
     case INNER_DOC_COMMENT:
       push (Rust::Token::make_inner_doc_comment (tok.get_locus (),
 						 std::move (data)));
@@ -639,11 +642,6 @@ TokenCollector::visit (TypePathSegmentGeneric &segment)
   //    `<` `>`
   //    | `<` ( GenericArg `,` )* GenericArg `,`? `>`
   describe_node (std::string ("TypePathSegmentGeneric"), [this, &segment] () {
-    auto ident_segment = segment.get_ident_segment ();
-    auto id = ident_segment.as_string ();
-    push (Rust::Token::make_identifier (ident_segment.get_locus (),
-					std::move (id)));
-
     auto locus = segment.is_lang_item ()
 		   ? segment.get_locus ()
 		   : segment.get_ident_segment ().get_locus ();
@@ -862,6 +860,9 @@ TokenCollector::visit (Literal &lit, location_t locus)
       break;
     case Literal::LitType::RAW_STRING:
       push (Rust::Token::make_raw_string (locus, std::move (value)));
+      break;
+    case Literal::LitType::C_STRING:
+      push (Rust::Token::make_c_string (locus, std::move (value)));
       break;
     case Literal::LitType::INT:
       {
@@ -1868,37 +1869,66 @@ TokenCollector::visit (LlvmInlineAsm &expr)
   push (Rust::Token::make_identifier (expr.get_locus (), "llvm_asm"));
   push (Rust::Token::make (EXCLAM, expr.get_locus ()));
   push (Rust::Token::make (LEFT_PAREN, expr.get_locus ()));
-  for (auto &template_str : expr.get_templates ())
-    push (Rust::Token::make_string (template_str.get_locus (),
-				    std::move (template_str.symbol)));
+  push (Rust::Token::make_string (expr.get_template ().get_locus (),
+				  std::move (expr.get_template ().symbol)));
 
   push (Rust::Token::make (COLON, expr.get_locus ()));
+
+  bool needs_comma = false;
+
   for (auto output : expr.get_outputs ())
     {
+      if (needs_comma)
+	push (Rust::Token::make (COMMA, expr.get_locus ()));
+      needs_comma = true;
       push (Rust::Token::make_string (expr.get_locus (),
 				      std::move (output.constraint)));
+      push (Rust::Token::make (LEFT_PAREN, expr.get_locus ()));
       visit (output.expr);
-      push (Rust::Token::make (COMMA, expr.get_locus ()));
+      push (Rust::Token::make (RIGHT_PAREN, expr.get_locus ()));
     }
 
   push (Rust::Token::make (COLON, expr.get_locus ()));
+  needs_comma = false;
   for (auto input : expr.get_inputs ())
     {
+      if (needs_comma)
+	push (Rust::Token::make (COMMA, expr.get_locus ()));
+      needs_comma = true;
       push (Rust::Token::make_string (expr.get_locus (),
 				      std::move (input.constraint)));
+      push (Rust::Token::make (LEFT_PAREN, expr.get_locus ()));
       visit (input.expr);
-      push (Rust::Token::make (COMMA, expr.get_locus ()));
+      push (Rust::Token::make (RIGHT_PAREN, expr.get_locus ()));
     }
 
   push (Rust::Token::make (COLON, expr.get_locus ()));
+  needs_comma = false;
   for (auto &clobber : expr.get_clobbers ())
     {
+      if (needs_comma)
+	push (Rust::Token::make (COMMA, expr.get_locus ()));
+      needs_comma = true;
       push (Rust::Token::make_string (expr.get_locus (),
 				      std::move (clobber.symbol)));
-      push (Rust::Token::make (COMMA, expr.get_locus ()));
     }
   push (Rust::Token::make (COLON, expr.get_locus ()));
-  // Dump options
+
+#define X(code, s)                                                             \
+  if (expr.code)                                                               \
+    {                                                                          \
+      if (needs_comma)                                                         \
+	push (Rust::Token::make (COMMA, expr.get_locus ()));                   \
+      needs_comma = true;                                                      \
+      push (Rust::Token::make_string (expr.get_locus (), s));                  \
+    }
+
+  needs_comma = false;
+  X (is_volatile (), "volatile")
+  X (is_stack_aligned (), "alignstack")
+  X (get_dialect () == LlvmInlineAsm::Dialect::Intel, "intel")
+
+#undef X
 
   push (Rust::Token::make (RIGHT_PAREN, expr.get_locus ()));
 }
@@ -3055,35 +3085,11 @@ TokenCollector::visit (GroupedPattern &pattern)
 }
 
 void
-TokenCollector::visit (SlicePatternItemsNoRest &items)
-{
-  visit_items_joined_by_separator (items.get_patterns (), COMMA);
-}
-
-void
-TokenCollector::visit (SlicePatternItemsHasRest &items)
-{
-  if (!items.get_lower_patterns ().empty ())
-    {
-      visit_items_joined_by_separator (items.get_lower_patterns (), COMMA);
-      push (Rust::Token::make (COMMA, UNDEF_LOCATION));
-    }
-
-  push (Rust::Token::make (DOT_DOT, UNDEF_LOCATION));
-
-  if (!items.get_upper_patterns ().empty ())
-    {
-      push (Rust::Token::make (COMMA, UNDEF_LOCATION));
-      visit_items_joined_by_separator (items.get_upper_patterns (), COMMA);
-    }
-}
-
-void
 TokenCollector::visit (SlicePattern &pattern)
 {
   describe_node (std::string ("SlicePattern"), [this, &pattern] () {
     push (Rust::Token::make (LEFT_SQUARE, pattern.get_locus ()));
-    visit (pattern.get_items ());
+    visit_items_joined_by_separator (pattern.get_patterns (), COMMA);
     push (Rust::Token::make (RIGHT_SQUARE, UNDEF_LOCATION));
   });
 }

@@ -389,6 +389,27 @@ gfc_build_addr_expr (tree type, tree t)
 }
 
 
+/* Return the descriptor that carries the span of DECL, which is marked as a
+   pointer array.  Such a decl usually is a descriptor.  The local decl of a
+   descriptorless dummy array is not, so its span comes from the descriptor it
+   was built from, which is the saved one.  */
+
+tree
+gfc_get_span_descriptor (tree decl)
+{
+  if (DECL_P (decl)
+      && GFC_ARRAY_TYPE_P (TREE_TYPE (decl))
+      && DECL_LANG_SPECIFIC (decl)
+      && GFC_DECL_SAVED_DESCRIPTOR (decl))
+    decl = GFC_DECL_SAVED_DESCRIPTOR (decl);
+
+  if (POINTER_TYPE_P (TREE_TYPE (decl)))
+    decl = build_fold_indirect_ref_loc (input_location, decl);
+
+  return decl;
+}
+
+
 static tree
 get_array_span (tree type, tree decl)
 {
@@ -409,7 +430,9 @@ get_array_span (tree type, tree decl)
       && (TREE_CODE (type) == ARRAY_TYPE || TREE_CODE (type) == INTEGER_TYPE)
       && TYPE_STRING_FLAG (type))
     {
-      if (TREE_CODE (decl) == PARM_DECL)
+      if (DECL_P (decl) && GFC_DECL_PTR_ARRAY_P (decl))
+	decl = gfc_get_span_descriptor (decl);
+      else if (TREE_CODE (decl) == PARM_DECL)
 	decl = build_fold_indirect_ref_loc (input_location, decl);
       if (GFC_DESCRIPTOR_TYPE_P (TREE_TYPE (decl)))
 	span = gfc_conv_descriptor_span_get (decl);
@@ -448,12 +471,11 @@ get_array_span (tree type, tree decl)
 	     to be multiplied with the size.  */
 	  span = gfc_resize_class_size_with_len (NULL, decl, span);
 	}
+      else if (tree cached = GFC_DECL_GET_SPAN (decl))
+	/* A span addressed dummy loaded its span on entry.  */
+	span = cached;
       else if (GFC_DECL_PTR_ARRAY_P (decl))
-	{
-	  if (TREE_CODE (decl) == PARM_DECL)
-	    decl = build_fold_indirect_ref_loc (input_location, decl);
-	  span = gfc_conv_descriptor_span_get (decl);
-	}
+	span = gfc_conv_descriptor_span_get (gfc_get_span_descriptor (decl));
       else
 	span = NULL_TREE;
     }
@@ -476,9 +498,7 @@ gfc_build_spanned_array_ref (tree base, tree offset, tree span)
   tmp = gfc_build_addr_expr (pvoid_type_node, base);
   tmp = fold_build_pointer_plus_loc (input_location, tmp, offset);
   tmp = fold_convert (build_pointer_type (type), tmp);
-  if ((TREE_CODE (type) != INTEGER_TYPE && TREE_CODE (type) != ARRAY_TYPE)
-      || !TYPE_STRING_FLAG (type))
-    tmp = build_fold_indirect_ref_loc (input_location, tmp);
+  tmp = build_fold_indirect_ref_loc (input_location, tmp);
   return tmp;
 }
 
@@ -1932,7 +1952,7 @@ gfc_deallocate_with_status (tree pointer, tree status, tree errmsg, tree errlen,
 	  tree cond, omp_tmp;
 	  if (descr)
 	    cond = fold_build2_loc (input_location, EQ_EXPR, boolean_type_node,
-				    gfc_conv_descriptor_version (descr),
+				    gfc_conv_descriptor_version_get (descr),
 				    integer_one_node);
 	  else
 	    cond = gfc_omp_call_is_alloc (pointer);
@@ -1946,8 +1966,7 @@ gfc_deallocate_with_status (tree pointer, tree status, tree errmsg, tree errlen,
       gfc_add_modify (&non_null, pointer, build_int_cst (TREE_TYPE (pointer),
 							 0));
       if (flag_openmp_allocators && descr)
-	gfc_add_modify (&non_null, gfc_conv_descriptor_version (descr),
-			integer_zero_node);
+	gfc_conv_descriptor_version_set (&non_null, descr, integer_zero_node);
 
       if (status != NULL_TREE && !integer_zerop (status))
 	{
@@ -2686,6 +2705,9 @@ trans_code (gfc_code * code, tree cond)
 	case EXEC_OACC_EXIT_DATA:
 	case EXEC_OACC_ATOMIC:
 	case EXEC_OACC_DECLARE:
+	case EXEC_OACC_INIT:
+	case EXEC_OACC_SHUTDOWN:
+	case EXEC_OACC_SET:
 	  res = gfc_trans_oacc_directive (code);
 	  break;
 

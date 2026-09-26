@@ -60,6 +60,9 @@ UrlSuffix(gcc/AVR-Options.html#index-msplit-bit-shift)
 msplit-ldst
 UrlSuffix(gcc/AVR-Options.html#index-msplit-ldst)
 
+mstrict-addr-space-subsets
+UrlSuffix(gcc/AVR-Options.html#index-mstrict-addr-space-subsets)
+
 mstrict-X
 UrlSuffix(gcc/AVR-Options.html#index-mstrict-X)
 
@@ -71,6 +74,9 @@ UrlSuffix(gcc/AVR-Options.html#index-mrodata-in-ram)
 
 msp8
 UrlSuffix(gcc/AVR-Options.html#index-msp8)
+
+mdemote-switch
+UrlSuffix(gcc/AVR-Options.html#index-mdemote-switch)
 
 mfuse-add
 UrlSuffix(gcc/AVR-Options.html#index-mfuse-add)
@@ -93,6 +99,9 @@ UrlSuffix(gcc/AVR-Options.html#index-Wmisspelled-isr)
 mfract-convert-truncate
 UrlSuffix(gcc/AVR-Options.html#index-mfract-convert-truncate)
 
+mfuse-ifelse
+UrlSuffix(gcc/AVR-Options.html#index-mfuse-ifelse)
+
 mfuse-move
 UrlSuffix(gcc/AVR-Options.html#index-mfuse-move)
 
@@ -101,6 +110,9 @@ UrlSuffix(gcc/AVR-Options.html#index-mfuse-move)
 
 mfuse-move2
 UrlSuffix(gcc/AVR-Options.html#index-mfuse-move2)
+
+moptimize
+UrlSuffix(gcc/AVR-Options.html#index-moptimize-1)
 
 mabsdata
 UrlSuffix(gcc/AVR-Options.html#index-mabsdata)

@@ -48,12 +48,6 @@ void __gg__binary_to_packed( unsigned char *result,
                              __int128 value);
 
 extern "C"
-__int128 __gg__numeric_display_to_binary(const unsigned char *sign_byte,
-                                         const unsigned char *digits,
-                                               int ndigits,
-                                               int    stride);
-
-extern "C"
 __int128
 __gg__packed_to_binary(const unsigned char *psz,
                              int            nplaces);

@@ -50,6 +50,10 @@ static tree handle_no_dangling_attribute (tree *, tree, tree, int, bool *);
 static tree handle_annotation_attribute (tree *, tree, tree, int, bool *);
 static tree handle_trivial_abi_attribute (tree *, tree, tree, int, bool *);
 static tree handle_gnu_trivial_abi_attribute (tree *, tree, tree, int, bool *);
+static tree handle_no_specializations_attribute (tree *, tree, tree, int,
+						 bool *);
+static tree handle_gnu_no_specializations_attribute (tree *, tree, tree, int,
+						     bool *);
 
 /* If REF is an lvalue, returns the kind of lvalue that REF is.
    Otherwise, returns clk_none.  */
@@ -574,6 +578,8 @@ builtin_valid_in_constant_expr_p (const_tree decl)
 	  case CP_BUILT_IN_CONSTEXPR_DIAG:
 	  case CP_BUILT_IN_CURRENT_EXCEPTION:
 	  case CP_BUILT_IN_UNCAUGHT_EXCEPTIONS:
+	  case CP_BUILT_IN_IS_WITHIN_LIFETIME:
+	  case CP_BUILT_IN_START_LIFETIME:
 	    return true;
 	  default:
 	    break;
@@ -2050,6 +2056,7 @@ strip_typedefs_expr (tree t, bool *remove_attributes, unsigned int flags)
     case OVERLOAD:
     case BASELINK:
     case ARGUMENT_PACK_SELECT:
+    case REQUIRES_EXPR:
       return t;
 
     case TRAIT_EXPR:
@@ -4527,6 +4534,16 @@ cp_tree_equal (tree t1, tree t2)
     case REFLECT_EXPR:
       return compare_reflections (t1, t2);
 
+    case REQUIRES_EXPR:
+      if (cp_tree_equal (REQUIRES_EXPR_PARMS (t1),
+			  REQUIRES_EXPR_PARMS (t2))
+	  && cp_tree_equal (REQUIRES_EXPR_REQS (t1),
+			    REQUIRES_EXPR_REQS (t2))
+	  && cp_tree_equal (REQUIRES_EXPR_EXTRA_ARGS (t1),
+			    REQUIRES_EXPR_EXTRA_ARGS (t2)))
+	return true;
+      return false;
+
     default:
       break;
     }
@@ -5158,6 +5175,16 @@ type_has_unique_obj_representations (const_tree t, bool explain/*=false*/)
 	inform (loc, "%<std::nullptr_t%> has padding bits and no value bits");
       return false;
 
+    case LANG_TYPE:
+      if (REFLECTION_TYPE_P (t))
+	{
+	  if (explain)
+	    inform (loc, "%<std::meta::info%> has an unspecified object "
+		    "representation");
+	  return false;
+	}
+      gcc_fallthrough ();
+
     default:
       gcc_unreachable ();
     }
@@ -5259,7 +5286,7 @@ record_has_unique_obj_representations (const_tree t, const_tree sz,
 	    inform (DECL_SOURCE_LOCATION (last_named_field),
 		    "padding occurs after %qD", last_named_field);
 	  else
-	    inform (DECL_SOURCE_LOCATION (t),
+	    inform (location_of (const_cast <tree> (t)),
 		    "%qT has padding and no data fields", t);
 	}
       return false;
@@ -5313,6 +5340,8 @@ zero_init_expr_p (tree t)
     return false;
   if (TYPE_PTRMEM_P (type))
     return null_member_pointer_value_p (t);
+  if (REFLECTION_TYPE_P (type))
+    return null_reflection_p (t);
   if (TREE_CODE (t) == CONSTRUCTOR)
     {
       if (COMPOUND_LITERAL_P (t)
@@ -5609,6 +5638,8 @@ static const attribute_spec cxx_gnu_attributes[] =
     handle_abi_tag_attribute, NULL },
   { "no_dangling", 0, 1, false, true, false, false,
     handle_no_dangling_attribute, NULL },
+  { "no_specializations", 0, 1, false, false, false, false,
+    handle_gnu_no_specializations_attribute, NULL },
   { "trivial_abi", 0, 0, false, true, false, true,
     handle_gnu_trivial_abi_attribute, NULL },
 };
@@ -5667,6 +5698,8 @@ const scoped_attribute_specs internal_attribute_table =
 // clang-format off
 static const attribute_spec cxx_clang_attributes[] =
 {
+  { "no_specializations", 0, 1, false, false, false, false,
+    handle_no_specializations_attribute, NULL },
   { "trivial_abi", 0, 0, false, true, false, true,
     handle_trivial_abi_attribute, NULL },
 };
@@ -6075,6 +6108,85 @@ has_trivial_abi_attribute (tree type)
   return lookup_attribute ("trivial_abi", TYPE_ATTRIBUTES (type));
 }
 
+/* Handle a "no_specializations" attribute applied via
+   [[gnu::no_specializations]].
+   We reject that spelling; suggest [[clang::no_specializations]] or
+   __attribute__((no_specializations)) instead.  */
+
+static tree
+handle_gnu_no_specializations_attribute (tree *node, tree name, tree args,
+					 int flags, bool *no_add_attrs)
+{
+  if (flags & ATTR_FLAG_CXX11)
+    {
+      warning (OPT_Wattributes,
+	       "%<[[gnu::no_specializations]]%> is not supported; use "
+	       "%<[[clang::no_specializations]]%> or "
+	       "%<__attribute__((no_specializations))%> instead");
+      *no_add_attrs = true;
+      return NULL_TREE;
+    }
+  return handle_no_specializations_attribute (node, name, args, flags,
+					      no_add_attrs);
+}
+
+/* Handle a "no_specializations" attribute.  */
+
+static tree
+handle_no_specializations_attribute (tree *node, tree name, tree args, int,
+				     bool *no_add_attrs)
+{
+  if (args && TREE_CODE (TREE_VALUE (args)) != STRING_CST)
+    {
+      error ("%qE attribute argument must be a string constant", name);
+      *no_add_attrs = true;
+      return NULL_TREE;
+    }
+  /* Only allow on class templates, variable templates
+     and function templates.  */
+  if (!CLASS_TYPE_P (*node) && !VAR_OR_FUNCTION_DECL_P (*node))
+    {
+    invalid:
+      warning (OPT_Wattributes, "%qE attribute only applies to class, "
+				"function or variable templates", name);
+      *no_add_attrs = true;
+      return NULL_TREE;
+    }
+  tree ti = NULL_TREE;
+  if (TYPE_P (*node))
+    {
+      if (!TYPE_NAME (*node)
+	  || !DECL_IMPLICIT_TYPEDEF_P (TYPE_NAME (*node))
+	  || LAMBDA_TYPE_P (*node))
+	goto invalid;
+      if (TYPE_LANG_SPECIFIC (*node))
+	{
+	  if (CLASSTYPE_TEMPLATE_SPECIALIZATION (*node)
+	      || CLASSTYPE_EXPLICIT_INSTANTIATION (*node))
+	    goto invalid;
+	  ti = CLASSTYPE_TEMPLATE_INFO (*node);
+	}
+    }
+  else if (DECL_LANG_SPECIFIC (*node))
+    {
+      if (DECL_TEMPLATE_SPECIALIZATION (*node)
+	  || DECL_EXPLICIT_INSTANTIATION (*node))
+	goto invalid;
+      ti = DECL_TEMPLATE_INFO (*node);
+    }
+  if (ti)
+    {
+      if (!PRIMARY_TEMPLATE_P (TI_TEMPLATE (ti)))
+	goto invalid;
+      if (TYPE_P (*node) && DECL_ALIAS_TEMPLATE_P (TI_TEMPLATE (ti)))
+	goto invalid;
+    }
+  else if (!processing_template_decl || !template_parm_scope_p ())
+    goto invalid;
+
+  return NULL_TREE;
+}
+
 /* Validate the trivial_abi attribute on a completed class type.
    Called from finish_struct after the class is complete.  */
 
@@ -6086,6 +6198,13 @@ validate_trivial_abi_attribute (tree type)
 
   gcc_assert (COMPLETE_TYPE_P (type));
 
+  auto remove_trivial_abi_attribute = [type] {
+    for (tree variant = TYPE_MAIN_VARIANT (type); variant;
+	 variant = TYPE_NEXT_VARIANT (variant))
+      TYPE_ATTRIBUTES (variant)
+	= remove_attribute ("trivial_abi", TYPE_ATTRIBUTES (variant));
+  };
+
   /* Check for virtual bases.  */
   if (CLASSTYPE_VBASECLASSES (type))
     {
@@ -6093,8 +6212,7 @@ validate_trivial_abi_attribute (tree type)
       if (warning (OPT_Wattributes, "%<trivial_abi%> cannot be applied to %qT",
 		   type))
 	inform (input_location, "has a virtual base");
-      TYPE_ATTRIBUTES (type)
-	= remove_attribute ("trivial_abi", TYPE_ATTRIBUTES (type));
+      remove_trivial_abi_attribute ();
       return;
     }
 
@@ -6105,8 +6223,7 @@ validate_trivial_abi_attribute (tree type)
       if (warning (OPT_Wattributes, "%<trivial_abi%> cannot be applied to %qT",
 		   type))
 	inform (input_location, "is polymorphic");
-      TYPE_ATTRIBUTES (type)
-	= remove_attribute ("trivial_abi", TYPE_ATTRIBUTES (type));
+      remove_trivial_abi_attribute ();
       return;
     }
 
@@ -6126,8 +6243,7 @@ validate_trivial_abi_attribute (tree type)
 			   "%<trivial_abi%> cannot be applied to %qT", type))
 		inform (input_location, "has a non-trivial base class %qT",
 			base_type);
-	      TYPE_ATTRIBUTES (type)
-		= remove_attribute ("trivial_abi", TYPE_ATTRIBUTES (type));
+	      remove_trivial_abi_attribute ();
 	      return;
 	    }
 	}
@@ -6147,8 +6263,7 @@ validate_trivial_abi_attribute (tree type)
 			   "%<trivial_abi%> cannot be applied to %qT", type))
 		inform (input_location, "has a non-static data member "
 			"of non-trivial type %qT", field_type);
-	      TYPE_ATTRIBUTES (type)
-		= remove_attribute ("trivial_abi", TYPE_ATTRIBUTES (type));
+	      remove_trivial_abi_attribute ();
 	      return;
 	    }
 	}
@@ -6162,8 +6277,7 @@ validate_trivial_abi_attribute (tree type)
 		   type))
 	inform (input_location,
 		"copy constructors and move constructors are all deleted");
-      TYPE_ATTRIBUTES (type)
-	= remove_attribute ("trivial_abi", TYPE_ATTRIBUTES (type));
+      remove_trivial_abi_attribute ();
       return;
     }
 }

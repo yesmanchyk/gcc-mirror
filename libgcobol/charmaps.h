@@ -31,8 +31,14 @@
 #ifndef CHARMAPS_H
 #define CHARMAPS_H
 
+#include <cassert>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <map>
 #include <string>
+#include <type_traits>
+#include <unordered_map>
 #include <vector>
 
 #include <unistd.h>
@@ -48,13 +54,15 @@
  *  calls are in the "console" domain.
  *
  *  Second is the internal single-byte-coded codeset of the data, in memory,
- *  being manipulated by the generated code of the cobol executable.  The actual
+ *  being manipulated by the generated code of the cobol executable.  The
+ *  actual
  *  codeset of "internal" is either EBCDIC (in the form of Code Page 1140 or
  *  ASCII (Code Page 1252)
  *
  *  Third is the C++ source code of the GCOBOL compiler; this comment is
  *  in that environment.  We neither know, nor care, if this code is encoded in
- *  in UTF-8 (as is probable, in these enlighted days of 2022) or something like
+ *  in UTF-8 (as is probable, in these enlighted days of 2022) or
+ *  something like
  *  Code Page1252. We are going to regard it as "ascii" under the
  *  assumption that there is no reason for any character in the compiler's
  *  source code to have a code point outside of the plain vanilla 0x20 through
@@ -66,7 +74,8 @@
  *  bytes long in UTF-8, and five bytes long in CP1252.  We start with an
  *  assumption that it is UTF-8 and switch to CP1252 upon encountering a byte
  *  sequence with values above 0x80 that can't be UTF-8.  We have provision for
- *  forcing it to be one or the other.  Codepoints in that domain are referenced
+ *  forcing it to be one or the other.  Codepoints in that domain are
+ *  referenced
  *  as "raw".  Codepoint in the "raw" domain don't last long; they are be
  *  converted to either "ascii" or "internal" early on, as necessary.
  */
@@ -85,7 +94,8 @@
     compiled is also ASCII-based, even if it is actually UTF-8. Said another
     way, characters encoded between zero and 127 are regarded as ASCII.
 
-    This means that we are not going to try to compile EBCDIC COBOL source code;
+    This means that we are not going to try to compile EBCDIC COBOL
+    source code;
     any such will have to be externally converted to ASCII before feeding it
     through this compiler on an ASCII based Linux system.
 
@@ -259,15 +269,19 @@ enum
 #define ascii_underscore       ((uint8_t)('_'))
 #define ascii_asterisk         ((uint8_t)('*'))
 #define ascii_query            ((uint8_t)('?'))
-#define ascii_cr               ((uint8_t)('\r'))
+#define ascii_lbrace           ((uint8_t)('{'))
+#define ascii_rbrace           ((uint8_t)('}'))
+#define ascii_at               ((uint8_t)('@'))
 #define ascii_ff               ((uint8_t)('\f'))
-#define ascii_newline          ((uint8_t)('\n'))
 #define ascii_return           ((uint8_t)('\r'))
+#define ascii_newline          ((uint8_t)('\n'))
+#define ebcdic_return          ((uint8_t)(0x0D))
 #define ebcdic_zero            ((uint8_t)(0xF0))
 #define ebcdic_plus            ((uint8_t)(0x4E))
 #define ebcdic_minus           ((uint8_t)(0x60))
+#define ebcdic_newline         ((uint8_t)(0x25))
 
-extern unsigned char __gg__data_space[1]       ;
+extern unsigned char __gg__data_spaces[1]      ;
 extern unsigned char __gg__data_low_values[1]  ;
 extern unsigned char __gg__data_zeros[1]       ;
 extern unsigned char __gg__data_high_values[1] ;
@@ -286,6 +300,8 @@ extern const unsigned short __gg__ebcdic_to_cp1252_collation[256];
 const char * __gg__encoding_iconv_name( cbl_encoding_t encoding );
 cbl_encoding_t __gg__encoding_iconv_type( const char *name );
 extern cbl_encoding_t __gg__console_encoding;
+
+extern iconv_t helpful_iconv_open(const char *tocode, const char *fromcode);
 
 // returns a pointer to a static buffer.  Beware!
 char * __gg__iconverter(cbl_encoding_t from,
@@ -306,16 +322,24 @@ char * __gg__miconverter(cbl_encoding_t from,
 
 #define DEFAULT_SOURCE_ENCODING (iconv_CP1252_e)
 
-#if __FreeBSD__
-#define DEFAULT_32_ENCODING (iconv_UTF_32LE_e)
-#else
-#define DEFAULT_32_ENCODING (iconv_UTF32LE_e)
-#endif
+#define HOST_32_ENCODING (cobol_target_big_endian() ? iconv_UTF_32BE_e : iconv_UTF_32LE_e)
 
 #ifndef IN_TARGET_LIBS
 void error_msg_direct( const char gmsgid[], ... );
-  //// ATTRIBUTE_GCOBOL_DIAG(1, 2);  can't appear here?
 #endif
+
+
+static inline unsigned char *
+charmap_as_unsigned_chars(char *p)
+  {
+  return reinterpret_cast<unsigned char *>(p);
+  }
+
+static inline const unsigned char *
+charmap_as_unsigned_chars(const char *p)
+  {
+  return reinterpret_cast<const unsigned char *>(p);
+  }
 
 class charmap_t;
 
@@ -370,7 +394,7 @@ class cbl_iconv_t {
     auto p = cds.find(key);
     if( p != cds.end() ) return p->second;
 
-    iconv_t cd = iconv_open(key.tocode, key.fromcode);
+    iconv_t cd = helpful_iconv_open(key.tocode, key.fromcode);
     cds[key] = cd; // whether or not failed
 
     if( ! valid(cd) ) {
@@ -413,9 +437,122 @@ class charmap_t
       sign_type_ebcdic,
       } m_numeric_sign_type;
 
-    // This map retains the ASCII-to-encoded value in m_encoding, so that iconv
-    // need be called but once for each ASCII value.
-    std::unordered_map<cbl_char_t, cbl_char_t>m_map_of_encodings;
+    // In numeric display with sign internal, this bit gets turned on in either
+    // the leading or trailing digit to indicate the value is negative.  It
+    // is the single bit turned on for the `@` character.
+    uint8_t m_ascii_sign_bit[4];
+
+    // This map retains the ASCII-to-encoded value in m_encoding, so that
+    // iconv need be called but once for each ASCII value.
+    std::unordered_map<cbl_char_t, cbl_char_t> m_map_of_encodings;
+
+    cbl_char_t
+    get_encoded_char(const void *base_, size_t location) const
+      {
+      // The idea here is that we look into a stream of encoded characters.
+      // Starting at base_+location, we pick up m_stride characters and put
+      // them into the cbl_char_t (which is 32-bit unsigned integer) so that
+      // retval is not dependent on endianness of either the host machine or
+      // the target machine.
+
+      const unsigned char *base = static_cast<const unsigned char *>(base_);
+      const unsigned char *p = base + location;
+      cbl_char_t retval;
+
+      switch(m_stride)
+        {
+        case 1:
+          {
+          retval = p[0];
+          break;
+          }
+
+        case 2:
+          {
+          if(m_is_big_endian)
+            {
+            // The first byte is the high-order byte
+            retval = (p[0]<<8) + p[1];
+            }
+          else
+            {
+            // The first byte is the low-order byte
+            retval = (p[1]<<8) + p[0];
+            }
+          break;
+          }
+
+        default:
+          {
+          if(m_is_big_endian)
+            {
+            // The first byte is the high-order byte
+            retval = (p[0]<<24) + (p[1]<<16) + (p[2]<<8) + p[3];
+            }
+          else
+            {
+            // The first byte is the low-order byte
+            retval = (p[3]<<24) + (p[2]<<16) + (p[1]<<8) + p[0];
+            }
+          break;
+          }
+        }
+
+      return retval;
+      }
+
+    void
+    put_encoded_char(cbl_char_t ch, void *base_, size_t location) const
+      {
+      // This is the reverse of get encoded character.  The value in ch is
+      // placed in memory
+
+      unsigned char *base = static_cast<unsigned char *>(base_);
+      unsigned char *p = base + location;
+
+      switch(m_stride)
+        {
+        case 1:
+          p[0] = static_cast<unsigned char>(ch);
+          break;
+
+        case 2:
+          {
+          if(m_is_big_endian)
+            {
+            // The first byte is the high-order byte
+            p[0] = ch>>8;
+            p[1] = ch;
+            }
+          else
+            {
+            // The first byte is the low-order byte
+            p[1] = ch>>8;
+            p[0] = ch;
+            }
+          break;
+          }
+
+        default:
+          if(m_is_big_endian)
+            {
+            // The first byte is the high-order byte
+            p[0] = ch>>24;
+            p[1] = ch>>16;
+            p[2] = ch>>8;
+            p[3] = ch;
+            }
+          else
+            {
+            // The first byte is the low-order byte
+            p[3] = ch>>24;
+            p[2] = ch>>16;
+            p[1] = ch>>8;
+            p[0] = ch;
+            }
+          break;
+        }
+      }
 
   public:
     explicit charmap_t(cbl_encoding_t e)
@@ -451,8 +588,7 @@ class charmap_t
                             &outbuf, &outbytesleft);
       outlength = sizeof(response_) - outbytesleft;
 
-      const unsigned char *response =
-                                  reinterpret_cast<unsigned char *>(response_);
+      const unsigned char *response = charmap_as_unsigned_chars(response_);
 
       unsigned char char_0 = 0x00;
 
@@ -508,10 +644,12 @@ class charmap_t
         m_stride = 4;
         if( response[0] == 0xFF && response[1] == 0xFE )
           {
+          m_has_bom = true;
           char_0 = response[4];
           }
         else if( response[0] == 0xFE && response[1] == 0xFF )
           {
+          m_has_bom = true;
           m_is_big_endian = true;
           char_0 = response[7];
           }
@@ -546,21 +684,36 @@ class charmap_t
             &outbuf, &outbytesleft);
       outlength = sizeof(response_) - outbytesleft;
       m_is_like_utf8 = (outlength == 3);
+
+      if( !is_like_ebcdic() )
+        {
+        memset(m_ascii_sign_bit, 0x00, 4);
+        if( m_is_big_endian )
+          {
+          m_ascii_sign_bit[m_stride-1] = 0x40;
+          }
+        else
+          {
+          m_ascii_sign_bit[0] = 0x40;
+          }
+        }
       }
 
-    bool is_valid()      const { return m_is_valid     ; }
-    bool is_big_endian() const { return m_is_big_endian; }
-    bool has_bom()       const { return m_has_bom      ; }
-    uint8_t stride()     const { return m_stride       ; }
+    bool is_valid()             const { return m_is_valid       ; }
+    bool is_big_endian()        const { return m_is_big_endian  ; }
+    bool has_bom()              const { return m_has_bom        ; }
+    uint8_t stride()            const { return m_stride         ; }
 
-    cbl_char_t mapped_character(unsigned char ch)
+    cbl_char_t
+    mapped_character(unsigned char ch)
       {
       // The assumption is that anybody calling this routine is providing
       // a single-byte character in the DEFAULT_SOURCE_ENCODING encoding.  We
-      // return the equivalent character in the m_encoding
+      // return the equivalent character in the m_encoding.
       cbl_char_t retval;
       std::unordered_map<cbl_char_t, cbl_char_t>::const_iterator it =
-                                                   m_map_of_encodings.find(ch);
+        m_map_of_encodings.find(ch);
+
       if( it != m_map_of_encodings.end() )
         {
         retval = it->second;
@@ -569,23 +722,12 @@ class charmap_t
         {
         retval = 0;
         size_t outlength = 0;
-        char *mapped = __gg__iconverter(DEFAULT_SOURCE_ENCODING,
-                                        m_encoding,
-                                        &ch,
-                                        1,
-                                        &outlength);
-        switch(stride())
-          {
-          case 1:
-            retval = *reinterpret_cast<uint8_t *>(mapped);
-            break;
-          case 2:
-            retval = *reinterpret_cast<uint16_t *>(mapped);
-            break;
-          case 4:
-            retval = *reinterpret_cast<uint32_t *>(mapped);
-            break;
-          }
+        const char *mapped = __gg__iconverter(DEFAULT_SOURCE_ENCODING,
+                                              m_encoding,
+                                              &ch,
+                                              1,
+                                              &outlength);
+        retval = get_encoded_char(mapped, 0);
         m_map_of_encodings[ch] = retval;
         }
       return retval;
@@ -610,7 +752,7 @@ class charmap_t
     cbl_char_t high_value_character()
       {
       cbl_char_t retval = 0;
-      if( __gg__high_value_character == DEFAULT_HIGH_VALUE_8 )
+      if( false && __gg__high_value_character == DEFAULT_HIGH_VALUE_8 )
         {
         switch(m_stride)
           {
@@ -672,7 +814,7 @@ class charmap_t
     switch(m_numeric_sign_type)
       {
       case sign_type_ascii:
-        retval = !!(digit & NUMERIC_DISPLAY_SIGN_BIT_ASCII);
+        retval = !!(digit & m_ascii_sign_bit[m_stride-1]);
         break;
 
       case sign_type_ebcdic:
@@ -689,18 +831,24 @@ class charmap_t
     // ebcdic.
     switch(m_numeric_sign_type)
       {
+      // We need to do this in a loop because of the headaches caused by
+      // dealing with, for instance, little-endian characters on a big-endian
+      // architecture.
       case sign_type_ascii:
+        {
         if( is_negative )
           {
-          digit |= NUMERIC_DISPLAY_SIGN_BIT_ASCII;
+          digit |= m_ascii_sign_bit[m_stride-1];
           }
         else
           {
-          digit &= ~NUMERIC_DISPLAY_SIGN_BIT_ASCII;
+          digit &= ~m_ascii_sign_bit[m_stride-1];
           }
         break;
+        }
 
       case sign_type_ebcdic:
+        {
         if( is_negative )
           {
           digit &= ~NUMERIC_DISPLAY_SIGN_BIT_EBCDIC;
@@ -710,9 +858,56 @@ class charmap_t
           digit |= NUMERIC_DISPLAY_SIGN_BIT_EBCDIC;
           }
         break;
+        }
       }
     return digit;
     }
+
+  void
+  set_streamed_digit_negative(uint8_t *digit, bool is_negative)
+    {
+    // Enter with digit pointing to a digit that needs to be adjusted for
+    // numeric-display internal signededness.
+
+    // The loop might look odd, but it's how I decided to handle issues of
+    // big-endian characters on little-endian architectures, and
+    // little-endian characters on big-endian architectures, and so on.
+    switch(m_numeric_sign_type)
+      {
+      case sign_type_ascii:
+        {
+        if( is_negative )
+          {
+          for(int i=0; i<m_stride; i++ )
+            {
+            digit[i] |= m_ascii_sign_bit[i];
+            }
+          }
+        else
+          {
+          for(int i=0; i<m_stride; i++ )
+            {
+            digit[i] &= ~m_ascii_sign_bit[i];
+            }
+          }
+        break;
+        }
+
+      case sign_type_ebcdic:
+        {
+        if( is_negative )
+          {
+          *digit &= ~NUMERIC_DISPLAY_SIGN_BIT_EBCDIC;
+          }
+        else
+          {
+          *digit |= NUMERIC_DISPLAY_SIGN_BIT_EBCDIC;
+          }
+        break;
+        }
+      }
+    }
+
 
   bool
   is_like_ebcdic() const
@@ -729,30 +924,28 @@ class charmap_t
   void
   memset(void *dest_, cbl_char_t ch, size_t bytelength)
     {
-    uint8_t *dest = static_cast<uint8_t *>(dest_);
+    uint8_t byte3 = ch >> 24;
+    uint8_t byte2 = ch >> 16;
+    uint8_t byte1 = ch >>  8;
+    uint8_t byte0 = ch      ;
+    unsigned char *dest = static_cast<unsigned char *>(dest_);
     switch(m_stride)
       {
       case 1:
         {
         if( (ch & 0xFFFFFF00) == 0x00000000 )
           {
-          // This is the normal case of filling a buffer with a single byte
-          ::memset(dest, ch & 0xff, bytelength);
+          // This is the normal case of filling a buffer with a single byte.
+          std::memset(dest, ch & 0xff, bytelength);
           }
         else
           {
           // We are being asked to fill a byte-wide buffer with a multi-byte
           // character.
-          uint8_t byte3 = ch >> 24;
-          uint8_t byte2 = ch >> 16;
-          uint8_t byte1 = ch >>  8;
-          uint8_t byte0 = ch;
-          size_t fill;
-          size_t i=0;
+          size_t i = 0;
           if( byte3 )
             {
-            fill = bytelength / 4;
-            while( i<fill )
+            while( i + 4 <= bytelength )
               {
               dest[i++] = byte0;
               dest[i++] = byte1;
@@ -762,8 +955,7 @@ class charmap_t
             }
           else if( byte2 )
             {
-            fill = bytelength / 3;
-            while( i<fill )
+            while( i + 3 <= bytelength )
               {
               dest[i++] = byte0;
               dest[i++] = byte1;
@@ -772,8 +964,7 @@ class charmap_t
             }
           else
             {
-            fill = bytelength / 2;
-            while( i<fill )
+            while( i + 2 <= bytelength )
               {
               dest[i++] = byte0;
               dest[i++] = byte1;
@@ -781,7 +972,8 @@ class charmap_t
             }
           while( i < bytelength )
             {
-            dest[i++] = mapped_character(ascii_space);
+            dest[i++] = static_cast<unsigned char>(
+                                          mapped_character(ascii_space));
             }
           }
         break;
@@ -789,104 +981,157 @@ class charmap_t
 
       case 2:
         {
-        assert( !(bytelength&1) );
+        assert( !(bytelength & 1) );
         // We know the target has an even number of bytes available.  We also
         // know that each codepoint is usually one, but sometimes two, pairs
-        // of bytes
-        uint16_t top_half    = ch>>16;
-        uint16_t bottom_half = ch;
-        size_t fill = bytelength;
+        // of bytes.
         size_t i = 0;
-        uint16_t *p = PTRCAST(uint16_t, dest);
-        while( i<fill )
+        while( i < bytelength )
           {
-          p[i/2] = bottom_half;
-          i += 2;
-          if( i>= fill )
+          if( byte3 | byte2 )
             {
-            break;
+            if( i + 4 <= bytelength )
+              {
+              if( m_is_big_endian )
+                {
+                dest[i+0] = byte3;
+                dest[i+1] = byte2;
+                dest[i+2] = byte1;
+                dest[i+3] = byte0;
+                }
+              else
+                {
+                dest[i+3] = byte3;
+                dest[i+2] = byte2;
+                dest[i+1] = byte1;
+                dest[i+0] = byte0;
+                }
+              i += 4;
+              }
+            else
+              {
+              if( m_is_big_endian)
+                {
+                dest[i+1] = ascii_space;
+                dest[i+0] = 0;
+                }
+              else
+                {
+                dest[i+1] = 0;
+                dest[i+0] = ascii_space;
+                }
+              i += 2;
+              }
             }
-          if( top_half )
+          else
             {
-            p[i/2] = bottom_half;
+            if( m_is_big_endian )
+              {
+              dest[i+0] = byte1;
+              dest[i+1] = byte0;
+              }
+            else
+              {
+              dest[i+1] = byte1;
+              dest[i+0] = byte0;
+              }
             i += 2;
             }
-          }
-        if( i < bytelength )
-          {
-          // We were trying to put two-pair values into the destination, but
-          // there were an odd number of pairs available.
-          p[i] = mapped_character(ascii_space);
-          i += 2; // cppcheck-suppress unreadVariable
           }
         break;
         }
 
       case 4:
         {
-        assert( !(bytelength&3) );
-        // We know the target has multiple of four bytes available.
-        uint32_t *p = PTRCAST(uint32_t, dest);
-        size_t i = 0;
-        while( i<bytelength )
+        assert( !(bytelength & 3) );
+        // We know the target has a multiple of four bytes available.
+        for( size_t i = 0; i < bytelength; i += 4 )
           {
-          p[i/4] = ch;
-          i += 4;
+          if( m_is_big_endian )
+            {
+            dest[i+0] = byte3;
+            dest[i+1] = byte2;
+            dest[i+2] = byte1;
+            dest[i+3] = byte0;
+            }
+          else
+            {
+            dest[i+3] = byte3;
+            dest[i+2] = byte2;
+            dest[i+1] = byte1;
+            dest[i+0] = byte0;
+            }
           }
         break;
         }
       }
     }
 
-  void putch(cbl_char_t ch, void *base_, size_t location)
+  void
+  putch(cbl_char_t ch, void *base_, size_t location)
     {
     // This routine puts a character at a byte location.
-    uint8_t *base = static_cast<uint8_t *>(base_);
-    switch(m_stride)
-      {
-      case 1:
-        *reinterpret_cast<uint8_t*>(base+location) = ch;
-        break;            
-      case 2:             
-        *reinterpret_cast<uint16_t*>(base+location) = ch;
-        break;            
-      default:            
-        *reinterpret_cast<uint32_t*>(base+location) = ch;
-        break;
-      }
+    put_encoded_char(ch, base_, location);
     }
 
-  void putch(cbl_char_t ch, void *base_, size_t *location)
+  void
+  putch(cbl_char_t ch, void *base_, size_t *location)
     {
-    // This routine puts a character at a location, and updates the location
+    // This routine puts a character at a location, and updates the location.
     this->putch(ch, base_, *location);
     *location += m_stride;
     }
 
-  cbl_char_t getch(const void *base_, size_t location) const
+  cbl_char_t
+  getch(const void *base_, size_t location) const
     {
-    // This routine gets a character at a location
-    cbl_char_t retval;
-    const uint8_t *base = static_cast<const uint8_t *>(base_);
-    switch(m_stride)
+    // This routine gets the encoded character at a byte location.
+    return get_encoded_char(base_, location);
+    }
+
+  cbl_char_t
+  getch(const void *base_, size_t *location) const
+    {
+    // This routine gets a character at a location, and updates the location.
+    cbl_char_t retval = this->getch(base_, *location);
+    *location += m_stride;
+    return retval;
+    }
+
+  cbl_char_t
+  getch_native(const void *base_, size_t location) const
+    {
+    // This routine handles the situation where, for example, a character is
+    // picked up, and the program needs to know if is in the range of
+    // '0' through '9'.  So, if the charset is big-endian, but this is a
+    // little-endian machine, then the value needs to be byte-flipped.
+    cbl_char_t retval =  get_encoded_char(base_, location);
+
+    // retval is the encoded value.
+    bool target_big_endian = cobol_target_big_endian() ; // cppcheck-suppress knownConditionTrueFalse
+    if(    ( m_is_big_endian && !target_big_endian)      // cppcheck-suppress knownConditionTrueFalse
+        || (!m_is_big_endian &&  target_big_endian) )    // cppcheck-suppress knownConditionTrueFalse
       {
-      case 1:
-        retval = *reinterpret_cast<const uint8_t*>(base+location);
-        break;
-      case 2:
-        retval = *reinterpret_cast<const uint16_t*>(base+location);
-        break;
-      default:
-        retval = *reinterpret_cast<const uint32_t*>(base+location);
-        break;
+      // Flip the encoded value to match the machine's endianness
+      if( m_stride == 4 )
+        {
+        retval = __builtin_bswap32(retval);
+        }
+      else
+        {
+        uint16_t v = retval;
+        v = __builtin_bswap16(v);
+        retval = v;
+        }
       }
     return retval;
     }
 
-  cbl_char_t getch(const void *base_, size_t *location) const
+  cbl_char_t
+  getch_native(const void *base_, size_t *location) const
     {
-    // This routine gets a character at a location, and updates the location
-    cbl_char_t retval = this->getch(base_, *location);
+    // This routine gets a character at a location, and updates the location.
+    cbl_char_t retval = this->getch_native(base_, *location);
     *location += m_stride;
     return retval;
     }
@@ -908,93 +1153,64 @@ class charmap_t
       retval *= 10;
       retval += ch & 0x0F;
       }
-    *end = in + index-m_stride ;
+    *end = in + index - m_stride ;
     return retval;
     }
 
-    template <typename T>
     size_t
-    Strlen( T *input, ssize_t limit = SSIZE_MAX ) {
-      size_t i;
-      for( i = 0; i < (limit / sizeof(T)) && input[i] != 0; i++ )
-        ;
-      return i;
-    }
-    size_t strlen2( const void *converted, ssize_t limit = SSIZE_MAX ) {
-      switch(m_stride) {
-      case 1:
-        return Strlen( reinterpret_cast<const char*>(converted), limit );
-      case 2:
-        return Strlen( reinterpret_cast<const uint16_t*>(converted), limit );
-      case 4:
-        return Strlen( reinterpret_cast<const uint16_t*>(converted), limit );
+    strlen2(const void *converted, ssize_t limit = SSIZE_MAX)
+      {
+      return strlen(converted, limit) / m_stride;
       }
-      //// gcc_unreachable();
-      return -1; // Mollify cppcheck.
-    }
 
   size_t
-  strlen( const void *converted,
-          ssize_t limit = SSIZE_MAX)
+  strlen(const void *converted, ssize_t limit = SSIZE_MAX) const
     {
-    size_t retval;
+    const unsigned char *p_start =
+      static_cast<const unsigned char *>(converted);
+    size_t limit_bytes;
 
-    union
+    if( limit < 0 )
       {
-      const uint8_t  *p8 ;
-      const uint16_t *p16;
-      const uint32_t *p32;
-      } ;
-    const uint8_t *p_start = reinterpret_cast<const uint8_t *>(converted);
-    p8 = p_start;
-    switch(m_stride)
-      {
-      case 1:
-        {
-        // Loop until the pointer is past the limit, or until we hit
-        // a character that is all zeroes
-        while(*p8)
-          {
-          if( p8 - p_start > limit )
-            {
-            break;
-            }
-          p8 += 1;
-          }
-        break;
-        }
-      case 2:
-        {
-        // Loop until the pointer is past the limit, or until we hit
-        // a character that is all zeroes
-        while(*p16)
-          {
-          if( p8 - p_start > limit )
-            {
-            break;
-            }
-          p8 += 2;
-          }
-        break;
-        }
-      case 4:
-        {
-        // Loop until the pointer is past the limit, or until we hit
-        // a character that is all zeroes
-        while(*p32)
-          {
-          if( p8 - p_start > limit )
-            {
-            break;
-            }
-          p8 += 4;
-          }
-        break;
-        }
+      limit_bytes = SIZE_MAX;
       }
-    retval = p8 - p_start;
-    return retval;
+    else
+      {
+      limit_bytes = static_cast<size_t>(limit);
+      }
+
+    size_t offset = 0;
+    while( offset + m_stride <= limit_bytes )
+      {
+      if( getch(p_start, offset) == 0 )
+        {
+        break;
+        }
+      offset += m_stride;
+      }
+
+    return offset;
+    }
+
+  void
+  get_byte_string(char *ach, char ch)
+    {
+    /* This routine takes a single ASCII character and converts it to the
+       m_stride bytes of the m_encoding, and copies those bytes to the ach
+       array, which had best be defined as ach[4] for generality.  The idea
+       here is to create a byte stream that can be, for example, copied to
+       a file without going crazy about the endianness of the target machine
+       and the endianness of the encoding. */
+    size_t nbytes;
+    const char *converted = __gg__iconverter(DEFAULT_SOURCE_ENCODING,
+                                             m_encoding,
+                                             &ch,
+                                             1,
+                                             &nbytes);
+    memcpy(ach, converted, nbytes);
     }
   };
+
+char char_from_figconst(cbl_figconst_t figconst);
 
 #endif

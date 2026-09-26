@@ -131,6 +131,7 @@ static tree handle_no_limit_stack_attribute (tree *, tree, tree, int,
 static tree handle_pure_attribute (tree *, tree, tree, int, bool *);
 static tree handle_tm_attribute (tree *, tree, tree, int, bool *);
 static tree handle_tm_wrap_attribute (tree *, tree, tree, int, bool *);
+static tree handle_callback_only_attribute (tree *, tree, tree, int, bool *);
 static tree handle_novops_attribute (tree *, tree, tree, int, bool *);
 static tree handle_unavailable_attribute (tree *, tree, tree, int,
 					  bool *);
@@ -192,6 +193,9 @@ static tree handle_null_terminated_string_arg_attribute (tree *, tree, tree, int
 
 static tree handle_btf_decl_tag_attribute (tree *, tree, tree, int, bool *);
 static tree handle_btf_type_tag_attribute (tree *, tree, tree, int, bool *);
+
+static tree handle_suppress_coverage_attribute (tree *, tree, tree, int,
+						bool *);
 
 /* Helper to define attribute exclusions.  */
 #define ATTR_EXCL(name, function, type, variable)	\
@@ -485,8 +489,8 @@ const struct attribute_spec c_common_gnu_attributes[] =
 			      handle_tm_attribute, NULL },
   { "transaction_may_cancel_outer", 0, 0, false, true, false, false,
 			      handle_tm_attribute, NULL },
-  { CALLBACK_ATTR_IDENT,      1, -1, true, false, false, false,
-			      handle_callback_attribute, NULL },
+  { "callback_only",          1, -1, true, false, false, false,
+			      handle_callback_only_attribute, NULL },
   /* ??? These two attributes didn't make the transition from the
      Intel language document to the multi-vendor language document.  */
   { "transaction_pure",       0, 0, false, true,  false, false,
@@ -615,6 +619,8 @@ const struct attribute_spec c_common_gnu_attributes[] =
 			      handle_omp_declare_target_attribute, NULL },
   { "omp declare target nohost", 0, 0, true, false, false, false,
 			      handle_omp_declare_target_attribute, NULL },
+  { "omp groupprivate",	      0, 0, true, false, false, false,
+			      handle_omp_declare_target_attribute, NULL },
   { "non overlapping",	      0, 0, true, false, false, false,
 			      handle_non_overlapping_attribute, NULL },
   { "alloc_align",	      1, 1, false, true, true, false,
@@ -643,6 +649,8 @@ const struct attribute_spec c_common_gnu_attributes[] =
 			      handle_special_var_sec_attribute, attr_section_exclusions },
   { "access",		      1, 3, false, true, true, false,
 			      handle_access_attribute, NULL },
+  { "suppress_coverage",       0, 0, true, false, false, false,
+			      handle_suppress_coverage_attribute, NULL },
   /* Attributes used by Objective-C.  */
   { "NSObject",		      0, 0, true, false, false, false,
 			      handle_nsobject_attribute, NULL },
@@ -2423,7 +2431,6 @@ handle_mode_attribute (tree *node, tree name, tree args,
     warning (OPT_Wattributes, "%qE attribute ignored", name);
   else
     {
-      int j;
       const char *p = IDENTIFIER_POINTER (ident);
       int len = strlen (p);
       machine_mode mode = VOIDmode;
@@ -2455,12 +2462,7 @@ handle_mode_attribute (tree *node, tree name, tree args,
       else if (!strcmp (p, "unwind_word"))
 	mode = targetm.unwind_word_mode ();
       else
-	for (j = 0; j < NUM_MACHINE_MODES; j++)
-	  if (!strcmp (p, GET_MODE_NAME (j)))
-	    {
-	      mode = (machine_mode) j;
-	      break;
-	    }
+	parse_machine_mode (p, &mode);
 
       if (mode == VOIDmode)
 	{
@@ -2963,7 +2965,7 @@ handle_counted_by_attribute (tree *node, tree name,
     }
   /* This attribute only applies to a C99 flexible array member type.  */
   else if (TREE_CODE (TREE_TYPE (decl)) == ARRAY_TYPE
-	   && !c_flexible_array_member_type_p (TREE_TYPE (decl)))
+	   && !flexible_array_member_type_p (TREE_TYPE (decl)))
     {
       error_at (DECL_SOURCE_LOCATION (decl),
 		"%qE attribute is not allowed for a non-flexible"
@@ -4672,6 +4674,164 @@ handle_tm_wrap_attribute (tree *node, tree name, tree args,
   return NULL_TREE;
 }
 
+/* Handle a "callback_only" attribute; arguments as in
+   struct attribute_spec.handler.  */
+tree
+handle_callback_only_attribute (tree *node, tree name, tree args,
+				int ARG_UNUSED (flags), bool *no_add_attrs)
+{
+  tree decl = *node;
+  if (TREE_CODE (decl) != FUNCTION_DECL)
+    {
+      warning_at (DECL_SOURCE_LOCATION (decl), OPT_Wattributes,
+		  "%qE attribute can only be used on functions", name);
+      *no_add_attrs = true;
+      return NULL_TREE;
+    }
+
+  tree decl_type = TREE_TYPE (decl);
+  if (stdarg_p (decl_type))
+    {
+      warning_at (DECL_SOURCE_LOCATION (decl), OPT_Wattributes,
+		  "%qE attribute cannot be used on variadic functions", name);
+      *no_add_attrs = true;
+      return NULL_TREE;
+    }
+
+  tree val = positional_argument (decl, name, TREE_VALUE (args), POINTER_TYPE,
+				  1, POSARG_ZERO);
+  if (!val)
+    {
+      *no_add_attrs = true;
+      return NULL_TREE;
+    }
+  TREE_VALUE (args) = val;
+
+  /* We have to use the function type for validation, as
+     DECL_ARGUMENTS returns NULL at this point.  */
+  int callback_fn_idx = TREE_INT_CST_LOW (val);
+  tree decl_type_args = TYPE_ARG_TYPES (decl_type);
+
+  if (callback_fn_idx == CB_UNKNOWN_POS)
+    {
+      warning_at (DECL_SOURCE_LOCATION (decl), OPT_Wattributes,
+		  "callback function position cannot be marked as unknown");
+      *no_add_attrs = true;
+      return NULL_TREE;
+    }
+
+  --callback_fn_idx;
+
+  /* Search for the type of the callback function in parameters of the original
+     function.  We know it's there because it's been validated by
+     positional_argument.  */
+  tree cfn = chain_index (callback_fn_idx, decl_type_args);
+  gcc_checking_assert (cfn != NULL_TREE);
+  cfn = TREE_VALUE (cfn);
+  tree cfn_pointee_type = TREE_TYPE (cfn);
+  if (TREE_CODE (cfn) != POINTER_TYPE
+      || TREE_CODE (cfn_pointee_type) != FUNCTION_TYPE)
+    {
+      warning_at (DECL_SOURCE_LOCATION (decl), OPT_Wattributes,
+		  "argument no. %d is not an address of a function",
+		  callback_fn_idx + 1);
+      *no_add_attrs = true;
+      return NULL_TREE;
+    }
+
+  tree type_args = TYPE_ARG_TYPES (cfn_pointee_type);
+
+  if (stdarg_p (cfn_pointee_type))
+    {
+      warning_at (DECL_SOURCE_LOCATION (decl), OPT_Wattributes,
+		  "%qE callback function cannot be variadic", name);
+      *no_add_attrs = true;
+      return NULL_TREE;
+    }
+
+  /* Compare the length of the list of argument indices
+     and the real number of parameters the callback takes.  */
+  unsigned cfn_nargs = list_length (TREE_CHAIN (args));
+  unsigned type_nargs = list_length (type_args) - 1;
+  if (cfn_nargs != type_nargs)
+    {
+      warning_at (DECL_SOURCE_LOCATION (decl), OPT_Wattributes,
+		  "argument number mismatch, %d expected, got %d", type_nargs,
+		  cfn_nargs);
+      *no_add_attrs = true;
+      return NULL_TREE;
+    }
+
+  unsigned curr = 0;
+  tree it, cfn_it;
+  /* Validate type compatibility of the arguments passed
+     from caller function to callback.  "it" is used to step
+     through the parameters of the caller, "cfn_it" is
+     stepping through the parameters of the callback.  */
+  for (it = type_args, cfn_it = TREE_CHAIN (args); curr < type_nargs;
+       it = TREE_CHAIN (it), cfn_it = TREE_CHAIN (cfn_it), curr++)
+    {
+      if (TREE_CODE (TREE_VALUE (cfn_it)) != INTEGER_CST)
+	{
+	  warning_at (DECL_SOURCE_LOCATION (decl), OPT_Wattributes,
+		      "argument no. %d is not an integer constant", curr + 1);
+	  *no_add_attrs = true;
+	  continue;
+	}
+
+      tree expected_type = TREE_VALUE (it);
+      tree arg_val = positional_argument (decl, name, TREE_VALUE (cfn_it),
+					  TREE_CODE (expected_type), curr + 1,
+					  POSARG_ZERO);
+      if (!arg_val)
+	{
+	  *no_add_attrs = true;
+	  return NULL_TREE;
+	}
+
+      TREE_VALUE (cfn_it) = arg_val;
+      int arg_idx = TREE_INT_CST_LOW (TREE_VALUE (cfn_it));
+
+      /* No need to check for type compatibility,
+	 if we don't know what we are passing.  */
+      if (arg_idx == CB_UNKNOWN_POS)
+	continue;
+
+      arg_idx -= 1;
+      tree arg_type = chain_index (arg_idx, decl_type_args);
+      gcc_checking_assert (arg_type != NULL_TREE);
+      arg_type = TREE_VALUE (arg_type);
+      /* Check the type of the value we are about to pass ("arg_type")
+	 for compatibility with the actual type the callback function
+	 expects ("expected_type").  */
+      if (!types_compatible_p (expected_type, arg_type))
+	{
+	  warning_at (DECL_SOURCE_LOCATION (decl), OPT_Wattributes,
+		      "argument type at index %d is not compatible with "
+		      "callback argument type at index %d",
+		      arg_idx + 1, curr + 1);
+	  *no_add_attrs = true;
+	  continue;
+	}
+    }
+
+  /* Check that the decl does not already have a callback attribute describing
+     the same argument.  */
+  it = lookup_attribute ("callback_only", DECL_ATTRIBUTES (decl));
+  for (; it; it = lookup_attribute ("callback_only", TREE_CHAIN (it)))
+    if (callback_get_fn_index (it) == callback_fn_idx)
+      {
+	warning_at (DECL_SOURCE_LOCATION (decl), OPT_Wattributes,
+		    "function declaration has multiple callback attributes "
+		    "describing argument no. %d",
+		    callback_fn_idx + 1);
+	*no_add_attrs = true;
+	break;
+      }
+
+  return NULL_TREE;
+}
+
 /* Ignore the given attribute.  Used when this attribute may be usefully
    overridden by the target, but is not used generically.  */
 
@@ -5337,6 +5497,22 @@ handle_nonstring_attribute (tree *node, tree name, tree ARG_UNUSED (args),
     warning (OPT_Wattributes, "%qE attribute ignored", name);
 
   *no_add_attrs = true;
+  return NULL_TREE;
+}
+
+/* Handle the "suppress_coverge" attribute.  We don't really do anything here,
+   just check later if it is set.  */
+static tree
+handle_suppress_coverage_attribute (tree *node, tree name,
+				    tree ARG_UNUSED (args),
+				    int ARG_UNUSED (flags), bool *no_add_attrs)
+{
+  if (TREE_CODE (*node) != FUNCTION_DECL)
+    {
+      warning (OPT_Wattributes, "%qE attribute ignored", name);
+      *no_add_attrs = true;
+    }
+
   return NULL_TREE;
 }
 

@@ -1,4 +1,5 @@
-       *> { dg-do run }
+      *> Do not edit this generated file.  See README.txt
+      *> { dg-do run }
        *> { dg-options "-dialect mf" }
 
         identification division.
@@ -14,7 +15,7 @@
           object-computer. Posix.
 
         data division.
-        >>define filename as "/tmp/test_file_size.cbl.txt"
+        >>define filename as "test_file_size.cbl.txt"
         >>define buffer as "hi, this text is exactly 38 bytes long"
         working-storage section.
           01 file-handle pic x(4) comp-5.
@@ -29,6 +30,8 @@
         procedure division.
           perform write-file.
           perform check-file-size.
+          move zero to return-code.
+          call "CBL_DELETE_FILE" using filename
           goback.
 
         write-file section.
@@ -77,6 +80,7 @@
                                      file-handle.
 
           if return-code <> 0
+            display "Failed to open file " filename
             display "CBL_OPEN_FILE failed with " return-code
             goback
           end-if.

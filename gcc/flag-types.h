@@ -289,7 +289,7 @@ enum auto_init_type {
   AUTO_INIT_UNINITIALIZED = 0,
   AUTO_INIT_PATTERN = 1,
   AUTO_INIT_ZERO = 2,
-  AUTO_INIT_CXX26 = 3
+  AUTO_INIT_CXX26 = 4
 };
 
 /* Initialization of padding bits with zeros.  */
@@ -583,6 +583,14 @@ enum omp_target_simd_clone_device_kind
   OMP_TARGET_SIMD_CLONE_HOST = 1,
   OMP_TARGET_SIMD_CLONE_NOHOST = 2,
   OMP_TARGET_SIMD_CLONE_ANY = 3
+};
+
+/* Levels for -fopenmp-ompt.  */
+enum omp_ompt_level
+{
+  OMP_OMPT_LEVEL_MINIMAL = 0,
+  OMP_OMPT_LEVEL_BASIC = 1,
+  OMP_OMPT_LEVEL_EXTENDED = 2
 };
 
 #endif

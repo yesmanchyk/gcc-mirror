@@ -715,7 +715,7 @@ simd_clone_adjust_return_type (struct cgraph_node *node)
   tree t;
 
   /* Adjust the function return type.  */
-  if (orig_rettype == void_type_node)
+  if (VOID_TYPE_P (orig_rettype))
     return;
   t = TREE_TYPE (TREE_TYPE (fndecl));
   if (INTEGRAL_TYPE_P (t) || POINTER_TYPE_P (t))
@@ -1370,7 +1370,7 @@ simd_clone_adjust (struct cgraph_node *node)
   simd_clone_adjust_argument_types (node);
   targetm.simd_clone.adjust (node);
   tree retval = NULL_TREE;
-  if (orig_rettype != void_type_node)
+  if (!VOID_TYPE_P (orig_rettype))
     {
       poly_uint64 veclen;
       if (INTEGRAL_TYPE_P (orig_rettype) || POINTER_TYPE_P (orig_rettype))
@@ -1574,7 +1574,7 @@ simd_clone_adjust (struct cgraph_node *node)
 	      c--;
 	      tree idx = make_ssa_name (TREE_TYPE (iter1));
 	      g = gimple_build_assign (idx, RSHIFT_EXPR, iter1,
-				       build_int_cst (NULL_TREE, s));
+				       build_int_cst (integer_type_node, s));
 	      gsi_insert_after (&gsi, g, GSI_CONTINUE_LINKING);
 	      mask = make_ssa_name (TREE_TYPE (TREE_TYPE (mask_array)));
 	      tree aref = build4 (ARRAY_REF,

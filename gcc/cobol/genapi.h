@@ -80,17 +80,17 @@ void parser_accept_command_line(const cbl_refer_t &tgt,
                                 cbl_label_t *not_error );
 void parser_accept_command_line_count( const cbl_refer_t &tgt );
 
-void parser_accept_date_yymmdd( cbl_field_t *tgt );
-void parser_accept_date_yyyymmdd( cbl_field_t *tgt );
-void parser_accept_date_yyddd( cbl_field_t *tgt );
-void parser_accept_date_yyyyddd( cbl_field_t *tgt );
-void parser_accept_date_dow( cbl_field_t *tgt );
-void parser_accept_date_hhmmssff( cbl_field_t *tgt );
+void parser_accept_date_yymmdd( const cbl_refer_t& tgt );
+void parser_accept_date_yyyymmdd( const cbl_refer_t& tgt );
+void parser_accept_date_yyddd( const cbl_refer_t& tgt );
+void parser_accept_date_yyyyddd( const cbl_refer_t& tgt );
+void parser_accept_date_dow( const cbl_refer_t& tgt );
+void parser_accept_date_hhmmssff( const cbl_refer_t& tgt );
 
 void
-parser_alphabet( const cbl_alphabet_t& alphabet );
+parser_alphabet( const cbl_alphabet_t *alphabet );
 void
-parser_alphabet_use( cbl_alphabet_t& alphabet );
+parser_alphabet_use( const cbl_alphabet_t *alphabet );
 
 void
 parser_allocate( cbl_refer_t size_or_based, cbl_refer_t returning, bool initialized );
@@ -203,6 +203,18 @@ void
 parser_classify( struct cbl_field_t *tgt,
            const struct cbl_refer_t &srca,
                  enum                classify_t type );
+
+void
+parser_compute( cbl_refer_t *tgt,
+                const std::deque<rpn_t>& operations,
+                cbl_label_t *lbl );
+
+void
+parser_compute( std::vector<cbl_num_result_t>& results,
+                const std::deque<rpn_t>& operations,
+                cbl_label_t *on_error,
+                cbl_label_t *not_error,
+                cbl_label_t *compute_error);
 
 void
 parser_op( struct cbl_refer_t cref,
@@ -460,8 +472,8 @@ parser_file_sort(   cbl_file_t *file,
                     cbl_perform_tgt_t *out_proc );
 void
 parser_file_merge(  cbl_file_t *file,
-                    cbl_alphabet_t *alphabet,
-                    const std::vector<cbl_key_t>& keys,
+              const cbl_alphabet_t *alphabet,
+              const std::vector<cbl_key_t>& keys,
                     size_t ninput,
                     cbl_file_t **inputs,
                     size_t noutput,
@@ -582,7 +594,6 @@ void parser_clear_exception();
 void parser_push_exception();
 void parser_pop_exception();
 
-void parser_call_targets_dump();
 size_t parser_call_target_update( size_t caller,
                                   const char extant[],
                                   const char mangled_tgt[] );

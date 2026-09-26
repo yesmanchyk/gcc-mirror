@@ -484,7 +484,8 @@ nvptx_encode_section_info (tree decl, rtx rtl, int first)
 
       if (VAR_P (decl))
 	{
-	  if (lookup_attribute ("shared", DECL_ATTRIBUTES (decl)))
+	  if (lookup_attribute ("shared", DECL_ATTRIBUTES (decl))
+	      || lookup_attribute ("omp groupprivate", DECL_ATTRIBUTES (decl)))
 	    {
 	      area = DATA_AREA_SHARED;
 	      if (DECL_INITIAL (decl))
@@ -2482,7 +2483,7 @@ nvptx_output_ascii (FILE *, const char *str, unsigned HOST_WIDE_INT size)
    given dimension.  */
 
 static bool
-flexible_array_member_type_p (const_tree type)
+nvptx_flexible_array_member_type_p (const_tree type)
 {
   if (TREE_CODE (type) != RECORD_TYPE)
     return false;
@@ -2520,7 +2521,7 @@ nvptx_assemble_decl_begin (FILE *file, const char *name, const char *section,
   bool atype = (TREE_CODE (type) == ARRAY_TYPE)
     && (TYPE_DOMAIN (type) == NULL_TREE);
 
-  if (undefined && flexible_array_member_type_p (type))
+  if (undefined && nvptx_flexible_array_member_type_p (type))
     {
       size = 0;
       atype = true;

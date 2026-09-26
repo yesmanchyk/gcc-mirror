@@ -163,6 +163,8 @@ create_our_type_nodes_init()
   int128_five_node    = build_int_cst_type(INT128,  5);
   int128_ten_node     = build_int_cst_type(INT128, 10);
   char_ptr_type_node  = build_pointer_type(CHAR);
+  const_char_ptr_type_node = build_pointer_type(build_qualified_type(CHAR,
+                                                             TYPE_QUAL_CONST));
   uchar_ptr_type_node = build_pointer_type(UCHAR);
   wchar_ptr_type_node = build_pointer_type(WCHAR);
   long_double_ten_node = build_real_from_int_cst(
@@ -342,7 +344,7 @@ cobol_option_lang_mask (void) {
   return CL_Cobol;
 }
 
-bool use_static_call( bool yn );
+bool set_use_static_call( bool yn );
 void add_cobol_exception( ec_type_t type, bool );
 
 bool include_file_add(const char input[]);
@@ -358,12 +360,8 @@ enable_exceptions( bool enable ) {
        NULL != (name = strtok(name, ",")); name = NULL ) {
     ec_type_t type = ec_type_of(name);
     if( type == ec_none_e ) {
-      cbl_message(EcUnknownW, "unrecognized exception '%s'", name);
+      cbl_message(EcUnknownW, "unrecognized exception %qs", name);
       continue;
-    }
-    ec_disposition_t disposition = ec_type_disposition(type);
-    if( disposition != ec_implemented(disposition) ) {
-      cbl_unimplemented("exception '%s'", name);
     }
     add_cobol_exception(type, enable );
   }
@@ -383,7 +381,6 @@ libcompat_copybook(const char *dir)
       {
           concat(gnu, dir_separator, "lib", NULL),
           concat(gnu, dir_separator, "cpy", NULL),
-          concat(gnu, dir_separator, "udf", NULL)
       };
 
   for (size_t i = 0; i < sizeof paths / sizeof *paths; i++)
@@ -440,6 +437,28 @@ append_copybook_prefix(const char *prefix, void (*fn)(const char *))
 
 void cobol_warning( cbl_diag_id_t id, int yn, bool );
 void cobol_warning_suppress( cbl_dialect_t dialect );
+
+/*
+ * If an unrecognized/unimplmemented EC is specified, emit a warning.  If the
+ * warning is turned off, keep quiet.
+ * 
+ * Tue Aug 25 09:41:37 2026: For reasons unclear gcobol duplicates some
+ * command-line options to cobol1.  In any case if the user specifies the ssme
+ * EC twice, or uses it more than once in the body of the code, he doesn't
+ * need two messages.
+ */
+void cbl_enabled_exceptions_t::
+complain( ec_type_t type ) {
+  static std::set<ec_type_t> said_so;
+  auto p = said_so.insert(type);
+  if( p.second ) {
+    ec_disposition_t disposition = ec_type_disposition(type);
+    if( disposition != ec_implemented(disposition) ) {
+      cbl_message(EcUnknownW, "sorry, exception %qs not implemented",
+                  ec_type_str(type));
+    }
+  }
+}
 
 static bool
 cobol_langhook_handle_option (size_t scode,
@@ -498,7 +517,7 @@ cobol_langhook_handle_option (size_t scode,
             return true;
 
         case OPT_fstatic_call:
-            use_static_call( arg? true : false );
+            set_use_static_call( value != 0 );
             return true;
 
         case OPT_fdefaultbyte:
@@ -577,8 +596,24 @@ cobol_langhook_handle_option (size_t scode,
 
         // Warnings and errors
 
+        case OPT_Wassign_external:
+          cobol_warning(MfAssignExternal, assign_external, warning_as_error);
+          return true;
+
+        case OPT_Wassign_file:
+          cobol_warning(IsoAssignFile, assign_file, warning_as_error);
+          return true;
+
         case OPT_Wbinary_long_long:
           cobol_warning(MfBinaryLongLong, binary_long_long, warning_as_error);
+          return true;
+
+        case OPT_Wcall_fd:
+          cobol_warning(IbmCallFd, cobol_call_fd, warning_as_error);
+          return true;
+
+        case OPT_Wdynamic_call:
+          cobol_warning(ParDynamicCall, cobol_dynamic_call, warning_as_error);
           return true;
 
         case OPT_Wcall_giving:
@@ -587,6 +622,10 @@ cobol_langhook_handle_option (size_t scode,
 
         case OPT_Wcall_literal:
           cobol_warning(MfCallLiteral, call_literal, warning_as_error);
+          return true;
+
+        case OPT_Wdisplay_screen:
+          cobol_warning(MfDisplayScreen, display_screen, warning_as_error);
           return true;
 
         case OPT_Wcdf_dollar:
@@ -599,6 +638,10 @@ cobol_langhook_handle_option (size_t scode,
 
         case OPT_Wcomp_x:
           cobol_warning(MfCompX, comp_x, warning_as_error);
+          return true;
+
+        case OPT_Whex_numeric:
+          cobol_warning(MfHexNumeric, hex_numeric, warning_as_error);
           return true;
 
         case OPT_Winspect_trailing:
@@ -621,12 +664,28 @@ cobol_langhook_handle_option (size_t scode,
           cobol_warning(MfMovePointer, move_pointer, warning_as_error);
           return true;
 
+        case OPT_Wset_numeric:
+          cobol_warning(MfSetNumeric, set_numeric, warning_as_error);
+          return true;
+
         case OPT_Wlevel_78:
           cobol_warning(MfLevel78, level_78, warning_as_error);
           return true;
 
         case OPT_Wany_length:
           cobol_warning(MfAnyLength, cobol_any_length, warning_as_error);
+          return true;
+
+        case OPT_Wredefines_first:
+          cobol_warning(MfRedefinesFirst, redefines_first, warning_as_error);
+          return true;
+
+        case OPT_Wredefines_table:
+          cobol_warning(MfRedefinesTable, redefines_table, warning_as_error);
+          return true;
+
+        case OPT_Wredefines_grow:
+          cobol_warning(IsoRedefinesGrow, redefines_grow, warning_as_error);
           return true;
 
         case OPT_Wreturning_number:
@@ -735,6 +794,10 @@ cobol_langhook_handle_option (size_t scode,
 
         case OPT_Wibm_cdf:
           cobol_warning(IbmCdf, cobol_ibmcdf, warning_as_error);
+          return true;
+
+        case OPT_Wcontent_expr:
+          cobol_warning(IbmContentExpr, content_expr, warning_as_error);
           return true;
 
         case OPT_Woperator_space:

@@ -106,7 +106,7 @@ get_memory_size_from_envvar (void)
     {
       char suffix[2];
       int rv;
-      rv = sscanf (e, "%zu%1s", &sz, suffix);
+      rv = sscanf (e, "%" FLM_Z "u%1s", &sz, suffix);
       if (rv == 2)
 	{
 	  switch (suffix[0])
@@ -134,11 +134,11 @@ get_memory_size_from_envvar (void)
       if (sizeof (size_t) == 4)
 	sz = ((size_t) 1) << 28;
       else
-#ifndef WIN32
-	sz = ((size_t) 1) << 34;
-#else
-	/* Use 1GB on Windows.  */
+#if defined(WIN32) || defined(__hpux__)
+	/* Use 1GB on Windows and HP-UX.  */
 	sz = ((size_t) 1) << 30;
+#else
+	sz = ((size_t) 1) << 34;
 #endif
     }
   return sz;
@@ -408,12 +408,24 @@ supervisor_main_loop (int *argc __attribute__ ((unused)),
 	  --i;
 	  continue;
 	}
+      for (j = 0;
+	   j < local->total_num_images && m->images[j].pid != finished_pid;
+	   j++)
+	;
+
+      /* An ERROR STOP on any image terminates all images.  */
+      if (j < local->total_num_images
+	  && m->images[j].status == IMAGE_ERROR_STOP)
+	{
+	  kill_all_images (m);
+	  while (wait (NULL) > 0)
+	    ;
+	  *exit_code = WIFEXITED (chstatus) ? WEXITSTATUS (chstatus) : 1;
+	  return 0;
+	}
+
       if (WIFEXITED (chstatus) && !WEXITSTATUS (chstatus))
 	{
-	  for (j = 0;
-	       j < local->total_num_images && m->images[j].pid != finished_pid;
-	       j++)
-	    ;
 	  /* Only set the status, when it has not been set by the (failing)
 	     image already.  */
 	  if (m->images[j].status == IMAGE_OK)
@@ -424,10 +436,6 @@ supervisor_main_loop (int *argc __attribute__ ((unused)),
 	}
       else if (!WIFEXITED (chstatus) || WEXITSTATUS (chstatus))
 	{
-	  for (j = 0;
-	       j < local->total_num_images && m->images[j].pid != finished_pid;
-	       j++)
-	    ;
 	  if (WEXITSTATUS (chstatus) == 210)
 	    {
 	      --i;
@@ -470,8 +478,13 @@ supervisor_main_loop (int *argc __attribute__ ((unused)),
 			   WTERMSIG (chstatus), finished_pid);
 		  continue;
 		}
-	      m->images[j].status = IMAGE_FAILED;
-	      atomic_fetch_add (&m->failed_images, 1);
+	      /* Only set the status, when it has not been set by the image
+		 already, e.g. by a STOP with a non-zero stop code.  */
+	      if (m->images[j].status == IMAGE_OK)
+		{
+		  m->images[j].status = IMAGE_FAILED;
+		  atomic_fetch_add (&m->failed_images, 1);
+		}
 	      if (*exit_code < WTERMSIG (chstatus))
 		*exit_code = WTERMSIG (chstatus);
 	      else if (*exit_code == 0)

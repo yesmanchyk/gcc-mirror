@@ -3,6 +3,7 @@
 // { dg-require-cstdint "" }
 
 #include <random>
+#include <cfloat>
 #include <sstream>
 #include <testsuite_hooks.h>
 
@@ -24,7 +25,7 @@ test_default()
 
   if (!std::numeric_limits<RealType>::is_iec559)
     return;
- 
+
   char const* expected = nullptr;
   switch (std::numeric_limits<RealType>::digits)
   {
@@ -40,7 +41,7 @@ test_default()
        " 1.00000000000000000e+00 1.00000000000000000e+00";
     VERIFY( res == expected );
     break;
-  case 64: // ieee80 
+  case 64: // ieee80
     expected =
       "1 0.000000000000000000000e+00 1.000000000000000000000e+00"
        " 1.000000000000000000000e+00 1.000000000000000000000e+00";
@@ -63,7 +64,7 @@ test_custom()
   str << u;
   std::string res = str.str();
 
-  std::piecewise_constant_distribution<RealType> v;
+  std::piecewise_linear_distribution<RealType> v;
   str >> v;
   // This does not hold currently
   // VERIFY( u == v );
@@ -77,19 +78,19 @@ test_custom()
   case 24: // ieee32
     expected =
       "3 0.000000000e+00 3.333333433e-01 6.666666865e-01 1.000000000e+00"
-	" 7.272727292e-01 9.090909278e-01 1.090909061e+00 1.272727325e+00";
+	" 6.666666865e-01 8.888888955e-01 1.111111164e+00 1.333333373e+00";
     VERIFY( res == expected );
     break;
   case 53: // ieee64
     expected =
-      "3 0.00000000000000000e+00 3.33333333333333315e-01 6.66666666666666630e-01 1.00000000000000000e+00" 
-	" 7.27272727272727182e-01 9.09090909090908950e-01 1.09090909090909083e+00 1.27272727272727249e+00";
+      "3 0.00000000000000000e+00 3.33333333333333315e-01 6.66666666666666630e-01 1.00000000000000000e+00"
+	" 6.66666666666666630e-01 8.88888888888888840e-01 1.11111111111111094e+00 1.33333333333333326e+00";
     VERIFY( res == expected );
     break;
-  case 64: // ieee80 
+  case 64: // ieee80
     expected =
       "3 0.000000000000000000000e+00 3.333333333333333333424e-01 6.666666666666666666847e-01 1.000000000000000000000e+00"
-	" 7.272727272727271818908e-01 9.090909090909090606303e-01 1.090909090909090828347e+00 1.272727272727272707087e+00";
+	" 6.666666666666666296592e-01 8.888888888888888395456e-01 1.111111111111111160454e+00 1.333333333333333259318e+00";
     VERIFY( res == expected );
     break;
   default:
@@ -103,10 +104,15 @@ int main()
   test_default<double>();
   test_default<long double>();
 
-#ifdef __x86_64__
+#if FLT_EVAL_METHOD >= 0
+# if FLT_EVAL_METHOD == 0
   test_custom<float>();
+# endif
+# if FLT_EVAL_METHOD != 2
   test_custom<double>();
-#endif  
+# endif
   test_custom<long double>();
+#endif
+
   return 0;
 }

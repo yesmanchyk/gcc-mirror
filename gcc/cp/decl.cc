@@ -1008,6 +1008,10 @@ wrapup_namespace_globals ()
     {
       for (tree decl : *statics)
 	{
+	  /* Rewrite the REFLECT_EXPR with 0 so that the ME can process it.  */
+	  if (flag_reflection && DECL_INITIAL (decl))
+	    rewrite_null_reflection (DECL_INITIAL (decl));
+
 	  if (warn_unused_function
 	      && TREE_CODE (decl) == FUNCTION_DECL
 	      && DECL_INITIAL (decl) == 0
@@ -4926,8 +4930,12 @@ struct typename_hasher : ggc_ptr_hash<tree_node>
   hash (tree context, tree fullname)
   {
     hashval_t hash = 0;
-    hash = iterative_hash_object (context, hash);
-    hash = iterative_hash_object (fullname, hash);
+    hash = iterative_hash_hashval_t (TYPE_HASH (context), hash);
+    /* FULLNAME could be a template-id, so use iterative_hash_template_arg here.
+       And might as well set comparing_specializations for stronger hashing.  */
+    ++comparing_specializations;
+    hash = iterative_hash_template_arg (fullname, hash);
+    --comparing_specializations;
     return hash;
   }
 
@@ -5669,7 +5677,20 @@ cxx_init_decl_processing (void)
 			       BUILT_IN_FRONTEND, NULL, NULL_TREE);
   set_call_expr_flags (decl, ECF_NOTHROW | ECF_LEAF);
 
-  integer_two_node = build_int_cst (NULL_TREE, 2);
+  decl = add_builtin_function ("__builtin_is_within_lifetime",
+			       bool_vaftype, CP_BUILT_IN_IS_WITHIN_LIFETIME,
+			       BUILT_IN_FRONTEND, NULL, NULL_TREE);
+  set_call_expr_flags (decl, ECF_NOTHROW | ECF_LEAF);
+  SET_DECL_IMMEDIATE_FUNCTION_P (decl);
+
+  tree void_vaftype = build_varargs_function_type_list (void_type_node,
+							NULL_TREE);
+  decl = add_builtin_function ("__builtin_start_lifetime",
+			       void_vaftype, CP_BUILT_IN_START_LIFETIME,
+			       BUILT_IN_FRONTEND, NULL, NULL_TREE);
+  set_call_expr_flags (decl, ECF_NOTHROW | ECF_LEAF);
+
+  integer_two_node = build_int_cst (integer_type_node, 2);
 
   /* Guess at the initial static decls size.  */
   vec_alloc (static_decls, 500);
@@ -6604,15 +6625,15 @@ start_decl (const cp_declarator *declarator,
       && !processing_template_decl
       && DECL_RESULT (decl)
       && is_auto (TREE_TYPE (DECL_RESULT (decl))))
-    for (tree ca = get_fn_contract_specifiers (decl); ca; ca = TREE_CHAIN (ca))
-      if (POSTCONDITION_P (CONTRACT_STATEMENT (ca))
-	  && POSTCONDITION_IDENTIFIER (CONTRACT_STATEMENT (ca)))
-	{
-	  error_at (DECL_SOURCE_LOCATION (decl),
-		    "postconditions with deduced result name types must only"
-		    " appear on function definitions");
-	  return error_mark_node;
-	}
+    if (tree specs = get_fn_contract_specifiers (decl))
+      for (tree ca : tree_vec_range (specs))
+	if (POSTCONDITION_P (ca) && POSTCONDITION_IDENTIFIER (ca))
+	  {
+	    error_at (DECL_SOURCE_LOCATION (decl),
+		      "postconditions with deduced result name types must only"
+		      " appear on function definitions");
+	    return error_mark_node;
+	  }
   /* Save the DECL_INITIAL value in case it gets clobbered to assist
      with attribute validation.  */
   initial = DECL_INITIAL (decl);
@@ -7473,6 +7494,7 @@ struct reshape_iter
 };
 
 static tree reshape_init_r (tree, reshape_iter *, tree, tsubst_flags_t);
+static tree reshape_single_init (tree, tree, tsubst_flags_t);
 
 /* FIELD is an element of TYPE_FIELDS or NULL.  In the former case, the value
    returned is the next FIELD_DECL (possibly FIELD itself) that can be
@@ -7659,6 +7681,11 @@ reshape_init_array_1 (tree elt_type, tree max_index, reshape_iter *d,
 	    }
 	  TREE_TYPE (elt_init) = elt_type;
 	}
+      else if (d->cur->index)
+	{
+	  elt_init = reshape_single_init (elt_type, d->cur->value, complain);
+	  d->cur++;
+	}
       else
 	elt_init = reshape_init_r (elt_type, d,
 				   /*first_initializer_p=*/NULL_TREE,
@@ -7829,8 +7856,25 @@ reshape_init_class (tree type, reshape_iter *d, bool first_initializer_p,
       return new_init;
     }
 
+  /* For C++29 designated initializers we do modify d->cur->index in place
+     to cache name lookup results.  Make sure to undo it before returning.  */
+  struct designator_undo {
+    constructor_elt *start, *end;
+    void undo ()
+    {
+      while (start != end)
+	{
+	  start->index = DECL_NAME (start->index);
+	  ++start;
+	}
+      start = end = nullptr;
+    }
+    ~designator_undo () { undo (); }
+  } desig_undo = { nullptr, nullptr };
+
   /* For C++20 CTAD, handle pack expansions in the base list.  */
   tree last_was_pack_expansion = NULL_TREE;
+  bool first_desig = true;
 
   /* Loop through the initializable fields, gathering initializers.  */
   while (d->cur != d->end)
@@ -7848,22 +7892,37 @@ reshape_init_class (tree type, reshape_iter *d, bool first_initializer_p,
 
 	  if (TREE_CODE (d->cur->index) == FIELD_DECL)
 	    {
-	      /* We already reshaped this; we should have returned early from
-		 reshape_init.  */
-	      gcc_checking_assert (false);
-	      if (field != d->cur->index)
-		{
-		  if (tree id = DECL_NAME (d->cur->index))
-		    gcc_checking_assert (d->cur->index
-					 == get_class_binding (type, id));
-		  field = d->cur->index;
-		}
+	      CONSTRUCTOR_IS_DESIGNATED_INIT (new_init) = true;
+	      direct_desig = true;
+	      field = d->cur->index;
 	    }
 	  else if (TREE_CODE (d->cur->index) == IDENTIFIER_NODE)
 	    {
+	      if (first_desig && cxx_dialect >= cxx20)
+		{
+		  if (CONSTRUCTOR_NELTS (new_init))
+		    {
+		      constructor_elt *last
+			= &CONSTRUCTOR_ELTS (new_init)->last ();
+		      if (last->index == NULL_TREE
+			  || TREE_CODE (last->index) != FIELD_DECL
+			  || !DECL_FIELD_IS_BASE (last->index))
+			{
+			  if (complain & tf_error)
+			    error ("last non-designated initializer clause "
+				   "does not appertain to a base class "
+				   "subobject");
+			  return error_mark_node;
+			}
+		    }
+		  first_desig = false;
+		}
 	      CONSTRUCTOR_IS_DESIGNATED_INIT (new_init) = true;
 	      field = get_class_binding (type, d->cur->index);
 	      direct_desig = true;
+	      if (!field && cxx_dialect >= cxx29)
+		field = lookup_member (type, d->cur->index, /*protect=*/2,
+				       /*want_type=*/false, complain);
 	    }
 	  else
 	    {
@@ -7911,6 +7970,62 @@ reshape_init_class (tree type, reshape_iter *d, bool first_initializer_p,
 		  if (same_type_ignoring_top_level_qualifiers_p (cctx, type))
 		    goto found;
 		  ictx = cctx;
+		}
+
+	      /* In C++29 a designator can name a member of a base; in that
+		 case, go through the designators and replace ids with _DECLs
+		 to record the lookup for the most-derived class.  */
+	      if (cxx_dialect >= cxx29)
+		{
+		  tree ibinfo = lookup_base (type, ictx, ba_unique, NULL,
+					     complain);
+		  if (!ibinfo)
+		    /* The designator names a field outside this base class,
+		       so we're done.  */
+		    break;
+		  else if (ibinfo != error_mark_node)
+		    {
+		      while (BINFO_INHERITANCE_CHAIN (ibinfo) != binfo)
+			ibinfo = BINFO_INHERITANCE_CHAIN (ibinfo);
+		      ictx = TREE_TYPE (ibinfo);
+
+		      desig_undo.undo ();
+
+		      if (d->cur->index != field)
+			{
+			  d->cur->index = field;
+			  desig_undo.start = d->cur;
+			}
+		      constructor_elt *e = d->cur + 1;
+		      for (; e != d->end; ++e)
+			{
+			  if (e->index == NULL_TREE
+			      || e->index == error_mark_node)
+			    break;
+			  if (desig_undo.start)
+			    {
+			      gcc_assert (TREE_CODE (e->index)
+					  == IDENTIFIER_NODE);
+			      field = lookup_member (type, e->index,
+						     /*protect=*/2,
+						     /*want_type=*/false,
+						     tf_none);
+			      if (!field || TREE_CODE (field) != FIELD_DECL)
+				break;
+			    }
+			  else
+			    {
+			      gcc_assert (TREE_CODE (e->index) == FIELD_DECL);
+			      field = e->index;
+			    }
+
+			  if (desig_undo.start)
+			    e->index = field;
+			}
+		      if (desig_undo.start)
+			desig_undo.end = e;
+		      goto found;
+		    }
 		}
 
 	      /* Not found, e.g. FIELD is a member of a base class.  */
@@ -8083,6 +8198,21 @@ reshape_init_r (tree type, reshape_iter *d, tree first_initializer_p,
       return init;
     }
 
+  /* If we have a designator, d doesn't initialize TYPE directly, it
+     initializes an element, with brace elision if !first_initializer_p.  But
+     if TYPE is non-aggregate (and we didn't already return error_mark_node),
+     we should have errored about the designator in has_designator_problem, so
+     now ignore it for error recovery.  */
+  if (d->cur->index)
+    {
+      /* Deliberately not CP_AGGREGATE_TYPE_P to get a better diagnostic for
+	 trying to designate a member of a non-aggregate class.  */
+      if (AGGREGATE_TYPE_P (type))
+	goto skip_single;
+      else
+	gcc_checking_assert (seen_error ());
+    }
+
   /* A non-aggregate type is always initialized with a single
      initializer.  */
   if (!CP_AGGREGATE_TYPE_P (type)
@@ -8133,8 +8263,6 @@ reshape_init_r (tree type, reshape_iter *d, tree first_initializer_p,
      initialized from that element."  Even if T is an aggregate.  */
   if (cxx_dialect >= cxx11 && (CLASS_TYPE_P (type) || VECTOR_TYPE_P (type))
       && first_initializer_p
-      /* But not if it's a designated init.  */
-      && !d->cur->index
       && d->end - d->cur == 1
       && TREE_CODE (init) != RAW_DATA_CST
       && reference_related_p (type, TREE_TYPE (init)))
@@ -8166,6 +8294,8 @@ reshape_init_r (tree type, reshape_iter *d, tree first_initializer_p,
 			      : init,
 			      LOOKUP_NORMAL, complain)))
     return consume_init (init, d);
+
+ skip_single:
 
   /* [dcl.init.string]
 
@@ -8211,7 +8341,7 @@ reshape_init_r (tree type, reshape_iter *d, tree first_initializer_p,
   bool braces_elided_p = false;
   if (!first_initializer_p)
     {
-      if (TREE_CODE (stripped_init) == CONSTRUCTOR)
+      if (TREE_CODE (stripped_init) == CONSTRUCTOR && !d->cur->index)
 	{
 	  tree init_type = TREE_TYPE (init);
 	  if (init_type && TYPE_PTRMEMFUNC_P (init_type))
@@ -8224,15 +8354,6 @@ reshape_init_r (tree type, reshape_iter *d, tree first_initializer_p,
 	     to handle initialization of arrays and similar.  */
 	  else if (COMPOUND_LITERAL_P (stripped_init))
 	    gcc_assert (!BRACE_ENCLOSED_INITIALIZER_P (stripped_init));
-	  /* If we have an unresolved designator, we need to find the member it
-	     designates within TYPE, so proceed to the routines below.  For
-	     FIELD_DECL or INTEGER_CST designators, we're already initializing
-	     the designated element.  */
-	  else if (d->cur->index
-		   && TREE_CODE (d->cur->index) == IDENTIFIER_NODE)
-	    /* Brace elision with designators is only permitted for anonymous
-	       aggregates.  */
-	    gcc_checking_assert (ANON_AGGR_TYPE_P (type));
 	  /* A CONSTRUCTOR of the target's type is a previously
 	     digested initializer.  */
 	  else if (same_type_ignoring_top_level_qualifiers_p (type, init_type))
@@ -9430,6 +9551,25 @@ omp_declare_variant_finalize (tree decl, tree attr)
     }
 }
 
+/* [basic.stc.dynamic.deallocation]/3 - A deallocation function shall not
+   have a potentially throwing exception specification.  */
+
+void
+maybe_diagnose_deallocation_noexcept_false (tree decl)
+{
+  if (cxx_dialect >= cxx29
+      && DECL_NAME (decl)
+      && IDENTIFIER_NEWDEL_OP_P (DECL_NAME (decl))
+      && !IDENTIFIER_NEW_OP_P (DECL_NAME (decl)))
+    {
+      tree spec = TYPE_RAISES_EXCEPTIONS (TREE_TYPE (decl));
+      if (spec && spec == noexcept_false_spec)
+	error_at (DECL_SOURCE_LOCATION (decl),
+		  "deallocation function %qD declared possibly throwing",
+		  decl);
+    }
+}
+
 static void cp_maybe_mangle_decomp (tree, cp_decomp *);
 
 /* Finish processing of a declaration;
@@ -9871,10 +10011,6 @@ cp_finish_decl (tree decl, tree init, bool init_const_expr_p,
 	    }
 	}
 
-      /* Detect stuff like 'info r = ^^int;' outside a manifestly
-	 constant-evaluated context.  */
-      check_out_of_consteval_use (decl);
-
       /* If this is a local variable that will need a mangled name,
 	 register it now.  We must do this before processing the
 	 initializer for the variable, since the initialization might
@@ -9899,10 +10035,10 @@ cp_finish_decl (tree decl, tree init, bool init_const_expr_p,
 	      walk_tree (&init, notice_forced_label_r, NULL, NULL);
 	      add_local_decl (cfun, decl);
 	    }
-	  if (!consteval_only_p (decl))
-	    /* And make sure it's in the symbol table for
-	       c_parse_final_cleanups to find.  */
-	    varpool_node::get_create (decl);
+	  /* And make sure it's in the symbol table for
+	     c_parse_final_cleanups to find.  */
+	  gcc_checking_assert (!consteval_only_p (decl));
+	  varpool_node::get_create (decl);
 	}
 
       if (flag_openmp
@@ -10976,7 +11112,10 @@ cp_finish_decomp (tree decl, cp_decomp *decomp, bool test_p)
 	  /* For structured bindings used in conditions we need to evaluate
 	     the conversion of decl (aka e in the standard) to bool or
 	     integral/enumeral type (the latter for switch conditions)
-	     before the get methods.  */
+	     before the get methods, as [dcl.struct.bind]/7 requires that:
+	     "The initialization of e and any conversion of e considered as
+	     a decision variable is sequenced before the initialization of
+	     any r_i."  */
 	  tree cond = convert_from_reference (decl);
 	  if (integer_onep (DECL_DECOMP_BASE (decl)))
 	    /* switch condition.  */
@@ -10987,12 +11126,14 @@ cp_finish_decomp (tree decl, cp_decomp *decomp, bool test_p)
 	    cond = contextual_conv_bool (cond, tf_warning_or_error);
 	  if (cond && !error_operand_p (cond))
 	    {
-	      /* Wrap that value into a TARGET_EXPR, emit it right
-		 away and save for later uses in the cp_parse_condition
-		 or its instantiation.  */
-	      cond = get_internal_target_expr (cond);
-	      add_stmt (cond);
-	      DECL_DECOMP_BASE (decl) = cond;
+	      cond = get_temp_regvar (TREE_TYPE (cond), cond);
+	      pushdecl (cond);
+	      /* Set DECL_DECOMP_BASE to cond VAR_DECL wrapped in
+		 NON_LVALUE_EXPR, such that it is considered to be
+		 the condition of a structured binding rather than
+		 structured binding's base variable.  */
+	      DECL_DECOMP_BASE (decl)
+		= build1 (NON_LVALUE_EXPR, TREE_TYPE (cond), cond);
 	    }
 	}
       int save_read = DECL_READ_P (decl);
@@ -12166,6 +12307,14 @@ grokfndecl (tree ctype,
       return NULL_TREE;
     }
 
+  /* [except.spec]/9 - A deallocation function with no explicit noexcept-specifier
+     has a non-throwing exception specification.  */
+  if (raises == NULL_TREE
+      && cxx_dialect >= cxx11
+      && IDENTIFIER_NEWDEL_OP_P (declarator)
+      && !IDENTIFIER_NEW_OP_P (declarator))
+    raises = noexcept_true_spec;
+
   type = build_cp_fntype_variant (type, rqual, raises, late_return_type_p);
 
   decl = build_lang_decl_loc (location, FUNCTION_DECL, declarator, type);
@@ -12613,6 +12762,10 @@ grokfndecl (tree ctype,
 	}
     }
 
+  /* [basic.stc.dynamic.deallocation]/3 - A deallocation function shall not
+     have a potentially throwing exception specification.  */
+  maybe_diagnose_deallocation_noexcept_false (decl);
+
   /* Caller will do the rest of this.  */
   if (check < 0)
     {
@@ -12751,12 +12904,6 @@ grokfndecl (tree ctype,
 
   if (DECL_CONSTRUCTOR_P (decl) && !grok_ctor_properties (ctype, decl))
     return NULL_TREE;
-
-  /* Don't call check_consteval_only_fn for defaulted functions.  Those are
-     immediate-escalating functions but at this point DECL_DEFAULTED_P has
-     not been set.  */
-  if (initialized != SD_DEFAULTED)
-    check_consteval_only_fn (decl);
 
   if (ctype == NULL_TREE || check)
     return decl;
@@ -15532,12 +15679,15 @@ grokdeclarator (const cp_declarator *declarator,
 	    if (xobj_parm)
 	      {
 		if (!ctype
-		    && decl_context == NORMAL
+		    && (decl_context == NORMAL || friendp)
 		    && (in_namespace
 			|| !declarator->declarator->u.id.qualifying_scope))
-		  error_at (DECL_SOURCE_LOCATION (xobj_parm),
-			    "a non-member function cannot have "
-			    "an explicit object parameter");
+		  {
+		    error_at (DECL_SOURCE_LOCATION (xobj_parm),
+			      "a non-member function cannot have "
+			      "an explicit object parameter");
+		    is_xobj_member_function = false;
+		  }
 		else
 		  {
 		    if (virtualp)
@@ -15606,11 +15756,12 @@ grokdeclarator (const cp_declarator *declarator,
 		  returned_attrs = attr_chainon (returned_attrs, att);
 	      }
 
-	    /* Actually apply the contract attributes to the declaration.  */
+	    /* Actually apply the contract specifiers to the declaration.  */
 	    if (flag_contracts)
 	      contract_specifiers
-		= attr_chainon (contract_specifiers,
-				declarator->u.function.contract_specifiers);
+		= contract_specifiers_concat
+		    (contract_specifiers,
+		     declarator->u.function.contract_specifiers);
 
 	    if (attrs)
 	      /* [dcl.fct]/2:
@@ -15670,6 +15821,8 @@ grokdeclarator (const cp_declarator *declarator,
 	      && TREE_CODE (type) == FUNCTION_TYPE)
 	    {
 	      memfn_quals |= type_memfn_quals (type);
+	      if (rqual == REF_QUAL_NONE)
+		rqual = type_memfn_rqual (type);
 	      type = build_memfn_type (type,
 				       declarator->u.pointer.class_type,
 				       memfn_quals,
@@ -18727,6 +18880,11 @@ xref_basetypes (tree ref, tree base_list)
 		 basetype);
 	  goto dropped_base;
 	}
+      else if (ANON_AGGR_TYPE_P (basetype))
+	{
+	  error ("base type %qT is anonymous struct type", basetype);
+	  goto dropped_base;
+	}
 
       base_binfo = NULL_TREE;
       if (CLASS_TYPE_P (basetype) && !dependent_scope_p (basetype))
@@ -20276,7 +20434,7 @@ store_parm_decls (tree current_function_parms)
 
   /* Register cleanups for parameters with trivial_abi attribute, the cleanup
      of which is the callee's responsibility.  */
-  if (!processing_template_decl)
+  if (!processing_template_decl && !DECL_CLONED_FUNCTION_P (fndecl))
     for (tree parm = DECL_ARGUMENTS (fndecl); parm; parm = DECL_CHAIN (parm))
       {
 	if (TREE_CODE (parm) == PARM_DECL)
@@ -20307,7 +20465,7 @@ maybe_prepare_return_this (tree cdtor)
   if (targetm.cxx.cdtor_returns_this ())
     if (tree val = DECL_ARGUMENTS (cdtor))
       {
-	suppress_warning (val, OPT_Wuse_after_free);
+	suppress_warning (val, OPT_Wuse_after_free_);
 	return val;
       }
 
@@ -21225,6 +21383,7 @@ cp_tree_node_structure (union lang_tree_node * t)
     case TRAIT_EXPR:		return TS_CP_TRAIT_EXPR;
     case TU_LOCAL_ENTITY:	return TS_CP_TU_LOCAL_ENTITY;
     case USERDEF_LITERAL:	return TS_CP_USERDEF_LITERAL;
+    case REQUIRES_EXPR:		return TS_CP_REQUIRES_EXPR;
     default:			return TS_CP_GENERIC;
     }
 }

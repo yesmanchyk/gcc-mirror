@@ -1,4 +1,5 @@
-       *> { dg-do run }
+      *> Do not edit this generated file.  See README.txt
+      *> { dg-do run }
        *> { dg-options "-dialect mf" }
        *> { dg-output-file "group2/CBL_OPEN_FILE___CBL_READ_FILE___CBL_CLOSE_FILE.out" }
 
@@ -35,7 +36,7 @@
       *> Deny both read and write.
           move 0 to deny-mode.
           display "Opening /dev/zero as read-only".
-          call "CBL_OPEN_FILE" using "/dev/zero"
+          call "CBL_OPEN_FILE" using Z"/dev/zero"
                                      access-mode
                                      deny-mode
                                      device

@@ -580,7 +580,7 @@ long_type_suffix (function_resolver &r, type_suffix_index type)
 /* Declare the function shape NAME, pointing it to an instance
    of class <NAME>_def.  */
 #define SHAPE(NAME)							\
-  static CONSTEXPR const NAME##_def NAME##_obj;				\
+  static constexpr const NAME##_def NAME##_obj;				\
   namespace shapes { const function_shape *const NAME = &NAME##_obj; }	\
   extern int __require_trailing_semicolon ATTRIBUTE_UNUSED
 
@@ -822,7 +822,7 @@ struct ext_base : public overloaded_base<0>
 /* Base class for inc_dec and inc_dec_pat.  */
 struct inc_dec_base : public overloaded_base<0>
 {
-  CONSTEXPR inc_dec_base (bool pat_p) : m_pat_p (pat_p) {}
+  constexpr inc_dec_base (bool pat_p) : m_pat_p (pat_p) {}
 
   /* Resolve based on the first argument only, which must be either a
      scalar or a vector.  If it's a scalar, it must be a 32-bit or
@@ -1521,6 +1521,122 @@ struct binary_int_opt_single_n_def : public overloaded_base<0>
   }
 };
 SHAPE (binary_int_opt_single_n);
+
+/* sv<t0>x<g>_t svfoo[_t0_g](sv<t0>_t, sv<t0>_t)
+   sv<t0>x<g>_t svfoo[_n_t0_g](sv<t0>_t, <t0>_t).  */
+struct binary_to_pair_opt_n_def : public overloaded_base<0>
+{
+  bool explicit_group_suffix_p () const override { return false; }
+
+  void
+  build (function_builder &b, const function_group_info &group) const override
+  {
+    b.add_overloaded_functions (group, MODE_none);
+    build_all (b, "t0,v0,v0", group, MODE_none);
+    build_all (b, "t0,v0,s0", group, MODE_n);
+  }
+
+  tree
+  resolve (function_resolver &r) const override
+  {
+    unsigned int i, nargs;
+    type_suffix_index type;
+    if (!r.check_gp_argument (2, i, nargs)
+	|| (type = r.infer_vector_type (i)) == NUM_TYPE_SUFFIXES)
+      return error_mark_node;
+
+    return r.finish_opt_n_resolution (i + 1, i, type, r.SAME_TYPE_CLASS,
+				      r.SAME_SIZE, sve_type (type, 2));
+  }
+};
+SHAPE (binary_to_pair_opt_n);
+
+/* sv<t0>x<g>_t svfoo[_t0_g](sv<t0>x<g>_t, sv<t0>_t, sv<t0>_t)
+   sv<t0>x<g>_t svfoo[_n_t0_g](sv<t0>x<g>_t, sv<t0>_t, <t0>_t).  */
+struct ternary_to_pair_opt_n_def : public overloaded_base<0>
+{
+  bool explicit_group_suffix_p () const override { return false; }
+
+  void
+  build (function_builder &b, const function_group_info &group) const override
+  {
+    b.add_overloaded_functions (group, MODE_none);
+    build_all (b, "t0,t0,v0,v0", group, MODE_none);
+    build_all (b, "t0,t0,v0,s0", group, MODE_n);
+  }
+
+  tree
+  resolve (function_resolver &r) const override
+  {
+    unsigned int i, nargs;
+    sve_type type;
+    if (!r.check_gp_argument (3, i, nargs)
+	|| !(type = r.infer_sve_type (i)))
+      return error_mark_node;
+
+    if (type.num_vectors != 2)
+      {
+	r.report_incorrect_num_vectors (i, type, 2);
+	return error_mark_node;
+      }
+
+    if (!r.require_derived_vector_type (i + 1, i, type))
+      return error_mark_node;
+
+    return r.finish_opt_n_resolution (i + 2, i + 1, type.type,
+				      r.SAME_TYPE_CLASS, r.SAME_SIZE, type);
+  }
+};
+SHAPE (ternary_to_pair_opt_n);
+
+/* svuint8x2_t svaes<...>_lane[_u8_x2] (svuint8x2_t zdn, svuint8_t zm, uint64_t
+   index);
+   and
+   svuint8x4_t svaes<...>_lane[_u8_x4] (svuint8x4_t zdn, svuint8_t zm, uint64_t
+   index);
+   When index is in range[0-3]
+*/
+struct binary_aes_lane_def : public overloaded_base<0>
+{
+  bool explicit_group_suffix_p () const override { return false; }
+
+  void
+  build (function_builder &b, const function_group_info &group) const override
+  {
+    b.add_overloaded_functions (group, MODE_none);
+    build_all (b, "t0,t0,v0,su64", group, MODE_none);
+  }
+
+  tree
+  resolve (function_resolver &r) const override
+  {
+    if (!r.check_num_arguments (3))
+      return error_mark_node;
+
+    sve_type type = r.infer_sve_type (0);
+    if (!type)
+      return error_mark_node;
+
+    if (type.num_vectors != 2 && type.num_vectors != 4)
+      return error_mark_node;
+
+    if (!r.require_vector_type (1, VECTOR_TYPE_svuint8_t))
+      return error_mark_node;
+
+    if (!r.require_integer_immediate (2))
+      return error_mark_node;
+
+    return r.resolve_to (MODE_none, type);
+  }
+
+  bool
+  check (function_checker &c) const override
+  {
+    return c.require_immediate_lane_index (2, 0, 4);
+  }
+};
+SHAPE (binary_aes_lane);
+
 
 /* sv<t0>_t svfoo_<t0>(sv<t0>_t, sv<t0>_t, uint64_t)
 
@@ -2819,7 +2935,7 @@ SHAPE (dup_neonq);
    whose size is tied to the [bhwd] suffix of "svfoo".  */
 struct inc_dec_def : public inc_dec_base
 {
-  CONSTEXPR inc_dec_def () : inc_dec_base (false) {}
+  constexpr inc_dec_def () : inc_dec_base (false) {}
 
   void
   build (function_builder &b, const function_group_info &group) const override
@@ -2844,7 +2960,7 @@ SHAPE (inc_dec);
    whose size is tied to the [bhwd] suffix of "svfoo".  */
 struct inc_dec_pat_def : public inc_dec_base
 {
-  CONSTEXPR inc_dec_pat_def () : inc_dec_base (true) {}
+  constexpr inc_dec_pat_def () : inc_dec_base (true) {}
 
   void
   build (function_builder &b, const function_group_info &group) const override
@@ -3347,6 +3463,51 @@ SHAPE (luti4_lane_zt);
 
 using luti4_zt_def = luti_zt_base<4>;
 SHAPE (luti4_zt);
+
+struct mop4_def : public overloaded_base<1>
+{
+  void build (function_builder &b,
+	      const function_group_info &group) const override
+  {
+    b.add_overloaded_functions (group, MODE_none);
+    build_all (b, "_,su64,v1,v2", group, MODE_1x1);
+    build_all (b, "_,su64,v1,u2", group, MODE_1x2);
+    build_all (b, "_,su64,u1,v2", group, MODE_2x1);
+    build_all (b, "_,su64,u1,u2", group, MODE_2x2);
+  }
+
+  tree resolve (function_resolver &r) const override
+  {
+    mode_suffix_index mode = MODE_1x1;
+    sve_type type1;
+    sve_type type2;
+
+    if (!r.check_num_arguments (3 + (r.fpm_mode == FPM_set))
+	|| !r.require_scalar_type (0, "uint64_t")
+	|| !r.require_integer_immediate (0)
+	|| !(type1 = r.infer_sve_type (1))
+	|| !(type2 = r.infer_sve_type (2)))
+      return error_mark_node;
+
+    if (type1.num_vectors == 1 && type2.num_vectors == 1)
+      mode = MODE_1x1;
+    else if (type1.num_vectors == 1 && type2.num_vectors == 2)
+      mode = MODE_1x2;
+    else if (type1.num_vectors == 2 && type2.num_vectors == 1)
+      mode = MODE_2x1;
+    else if (type1.num_vectors == 2 && type2.num_vectors == 2)
+      mode = MODE_2x2;
+
+    return r.resolve_to (mode, r.type_suffix_ids[0], type1.type, type2.type,
+			 GROUP_none);
+  }
+
+  bool check (function_checker &c) const override
+  {
+    return c.require_immediate_range (0, 0, c.num_za_tiles () - 1);
+  }
+};
+SHAPE (mop4);
 
 /* svbool_t svfoo(enum svpattern).  */
 struct pattern_pred_def : public nonoverloaded_base
@@ -4823,6 +4984,45 @@ struct ternary_uintq_intq_opt_n_def
   }
 };
 SHAPE (ternary_uintq_intq_opt_n);
+
+/* void svfoo_t0[_t1_t2](uint64_t, sv<t1>x2_t, sv<t2>_t, svuint8_t, uint64_t)
+   where the first argument is a ZA tile.
+   and the fifth argument is a control index (0-3)  */
+struct ternary_za_uint_dual_single_def : public overloaded_base<1>
+{
+  void
+  build (function_builder &b, const function_group_info &group) const override
+  {
+    b.add_overloaded_functions (group, MODE_none);
+    build_all (b, "_,su64,u1,v2,vu8,su64", group, MODE_none);
+  }
+
+  bool
+  check (function_checker &c) const override
+  {
+    return (c.require_immediate_range (0, 0, c.num_za_tiles () - 1)
+	    && c.require_immediate_range (4, 0, 3));
+  }
+
+  tree
+  resolve (function_resolver &r) const override
+  {
+    sve_type type1;
+    type_suffix_index type2;
+    if (!r.check_num_arguments (r.fpm_mode == FPM_set ? 6: 5)
+	|| !r.require_integer_immediate (0)
+	|| (type1 = r.infer_vector_or_tuple_type (1, 2)) == NUM_TYPE_SUFFIXES
+	|| (type2 = r.infer_vector_type (2)) == NUM_TYPE_SUFFIXES
+	|| !r.require_vector_type (3, VECTOR_TYPE_svuint8_t)
+	|| !r.require_integer_immediate (4)
+	|| (r.fpm_mode == FPM_set && !r.require_scalar_type (5, "uint64_t")))
+      return error_mark_node;
+
+    return r.resolve_to (r.mode_suffix_id, r.type_suffix_ids[0],
+			 type1.type, type2);
+  }
+};
+SHAPE (ternary_za_uint_dual_single);
 
 /* svbool_t svfoo[_<t0>](sv<t0>_t, sv<t0>_t, uint64_t)
 

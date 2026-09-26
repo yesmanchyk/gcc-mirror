@@ -16,7 +16,7 @@ struct local_rng : std::mt19937
   static constexpr std::uint64_t max() { return max_val; }
   std::uint64_t operator()()
   { return std::mt19937::operator()() % (max() + 1); }
-  
+
   local_rng(std::mt19937 const& arg) : std::mt19937(arg) {}
 };
 
@@ -30,7 +30,7 @@ int ifloor(__float128 t)
 #endif
 
 // Verify P0952R2 implementation requiring a second round-trip
-// if first yields exactly 1. 
+// if first yields exactly 1.
 template<typename T, size_t bits,
 	 size_t call_per_elem, size_t max_skips_per_elem,
 	 typename RNG>
@@ -106,12 +106,13 @@ test_2p32(const std::mt19937& rng)
     VERIFY(zeros == 0);
     break;
   case 53: // ieee64
-  case 64: // ieee80 
+  case 64: // ieee80
     VERIFY(deviation == 7650);
     VERIFY(max == 259);
     VERIFY(rms == 975);
     VERIFY(zeros == 0);
     break;
+  case 106: // ibm128
   case 113: // ieee128
     VERIFY(deviation == 9086);
     VERIFY(max == 290);
@@ -159,11 +160,18 @@ test_10p6(const std::mt19937& rng)
     VERIFY(rms == 921);
     VERIFY(zeros == 0);
     break;
-  case 64: // ieee80 
+  case 64: // ieee80
     VERIFY(skips == 1);
     VERIFY(deviation == 7774);
     VERIFY(max == 250);
     VERIFY(rms == 958);
+    VERIFY(zeros == 0);
+    break;
+  case 106: // ibm128
+    VERIFY(skips == 96);
+    VERIFY(deviation == 6980);
+    VERIFY(max == 260);
+    VERIFY(rms == 876);
     VERIFY(zeros == 0);
     break;
   case 113: // ieee128
@@ -214,11 +222,18 @@ test_2p31m1(const std::mt19937& rng)
     VERIFY(rms == 937);
     VERIFY(zeros == 0);
     break;
-  case 64: // ieee80 
+  case 64: // ieee80
     VERIFY(skips == 143342);
     VERIFY(deviation == 7788);
     VERIFY(max == 296);
     VERIFY(rms == 977);
+    VERIFY(zeros == 0);
+    break;
+  case 106: // ibm128
+    VERIFY(skips == 0);
+    VERIFY(deviation == 8828);
+    VERIFY(max == 330);
+    VERIFY(rms == 1084);
     VERIFY(zeros == 0);
     break;
   case 113: // ieee128
@@ -234,30 +249,183 @@ test_2p31m1(const std::mt19937& rng)
   }
 }
 
+template<std::uint64_t Max, typename Under = std::mt19937_64>
+struct trimmed_engine
+{
+  using result_type = std::uint64_t;
+
+  static constexpr
+  result_type min()
+  { return result_type(0); }
+
+  static constexpr
+  result_type max()
+  { return result_type(Max); }
+
+  trimmed_engine() : dist(min(), max())
+  {}
+
+  trimmed_engine(const Under& gen)
+  : under(gen), dist(min(), max())
+  {}
+
+  result_type operator()()
+  { return dist(under); }
+
+  void discard(std::size_t n)
+  {
+    for (size_t i = 0; i < n; ++i)
+      (void)dist(under);
+  }
+
+  friend bool
+  operator==(const trimmed_engine& lhs, const trimmed_engine& rhs)
+  { return lhs.under == rhs.under; }
+
+private:
+  Under under;
+  std::uniform_int_distribution<result_type> dist;
+};
+
+// Uses a generator that emits range of size 2^55+2.
+// To produce 128bit IEE float, we need 3 calls to above generator,
+// that can produce value that have 155 bits, and uses separate path.
+template <typename T>
+void
+test_2p55p1(const std::mt19937& rng)
+{
+  if (!std::numeric_limits<T>::is_iec559)
+    return;
+
+  constexpr size_t mantissa = std::numeric_limits<T>::digits;
+  constexpr size_t call_per_elem = (mantissa / 55) + 1;
+  const trimmed_engine<(1ULL << 55) + 1ULL, std::mt19937> lrng{rng};
+
+  int deviation = 0, max = 0, rms = 0, zeros = 0;
+  int skips = run_generator<T, -1u, call_per_elem, 1u>
+		(lrng, deviation, max, rms, zeros);
+
+  switch (mantissa)
+  {
+  case 24: // ieee32
+  case 53: // ieee64
+    VERIFY(skips == 0);
+    VERIFY(deviation == 7636);
+    VERIFY(max == 292);
+    VERIFY(rms == 965);
+    VERIFY(zeros == 0);
+    break;
+  case 64: // ieee80
+  case 106: // ibm128
+    VERIFY(skips == 0);
+    VERIFY(deviation == 7830);
+    VERIFY(max == 246);
+    VERIFY(rms == 963);
+    VERIFY(zeros == 0);
+    break;
+  case 113: // ieee128
+    VERIFY(skips == 0);
+    VERIFY(deviation == 7930);
+    VERIFY(max == 271);
+    VERIFY(rms == 981);
+    VERIFY(zeros == 0);
+    break;
+  default:
+    VERIFY(false);
+    break;
+  }
+}
+
+template <typename T>
+void
+test_2p7p1(const std::mt19937& rng)
+{
+  if (!std::numeric_limits<T>::is_iec559)
+    return;
+
+  constexpr size_t mantissa = std::numeric_limits<T>::digits;
+  constexpr size_t call_per_elem = (mantissa / 7) + 1;
+  const trimmed_engine<128U, std::mt19937> lrng{rng};
+
+  int deviation = 0, max = 0, rms = 0, zeros = 0;
+  int skips = run_generator<T, -1u, call_per_elem, 5u>
+		(lrng, deviation, max, rms, zeros);
+
+  switch (mantissa)
+  {
+  case 24: // ieee32
+    VERIFY(skips == 31641);
+    VERIFY(deviation == 8508);
+    VERIFY(max == 294);
+    VERIFY(rms == 1077);
+    VERIFY(zeros == 0);
+    break;
+  case 53: // ieee64
+    VERIFY(skips == 63971);
+    VERIFY(deviation == 7500);
+    VERIFY(max == 245);
+    VERIFY(rms == 919);
+    VERIFY(zeros == 0);
+    break;
+  case 64: // ieee80
+    VERIFY(skips == 2538);
+    VERIFY(deviation == 8266);
+    VERIFY(max == 310);
+    VERIFY(rms == 1065);
+    VERIFY(zeros == 0);
+    break;
+  case 106: // ibm128
+    VERIFY(skips == 6651);
+    VERIFY(deviation == 7740);
+    VERIFY(max == 282);
+    VERIFY(rms == 1000);
+    VERIFY(zeros == 0);
+    break;
+  case 113: // ieee128
+    VERIFY(skips == 679);
+    VERIFY(deviation == 7450);
+    VERIFY(max == 284);
+    VERIFY(rms == 936);
+    VERIFY(zeros == 0);
+    break;
+  default:
+    VERIFY(false);
+    break;
+  }
+}
+
 int main()
 {
   std::mt19937 rng(8890);
   std::seed_seq sequence{0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
   rng.seed(sequence);
   rng.discard(12 * 629143);
-      
+
   test_2p32<float>(rng);
   test_10p6<float>(rng);
   test_2p31m1<float>(rng);
+  test_2p55p1<float>(rng);
+  test_2p7p1<float>(rng);
 
   test_2p32<double>(rng);
   test_10p6<double>(rng);
   test_2p31m1<double>(rng);
+  test_2p55p1<double>(rng);
+  test_2p7p1<double>(rng);
 
   test_2p32<long double>(rng);
   test_10p6<long double>(rng);
   test_2p31m1<long double>(rng);
+  test_2p55p1<long double>(rng);
+  test_2p7p1<long double>(rng);
 
 #ifndef _GLIBCXX_GENERATE_CANONICAL_STRICT
 #  ifdef __SIZEOF_FLOAT128__
   test_2p32<__float128>(rng);
   test_10p6<__float128>(rng);
   test_2p31m1<__float128>(rng);
+  test_2p55p1<__float128>(rng);
+  test_2p7p1<__float128>(rng);
 #  endif
 #endif
 }

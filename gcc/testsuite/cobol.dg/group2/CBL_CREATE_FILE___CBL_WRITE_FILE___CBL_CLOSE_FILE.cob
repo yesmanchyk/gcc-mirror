@@ -1,5 +1,6 @@
-       *> { dg-do run }
-       *> { dg-options "-dialect mf" }
+      *> Do not edit this generated file.  See README.txt
+      *> { dg-do run }
+       *> { dg-options "-dialect mf -fcobol-exceptions EC-ALL" }
 
         identification division.
         program-id. test_cbl_write_file.

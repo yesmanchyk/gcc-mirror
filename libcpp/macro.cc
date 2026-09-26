@@ -392,8 +392,11 @@ builtin_has_include_1 (cpp_reader *pfile, const char *name, bool *paren,
 		       bool *bracket, location_t *loc)
 {
   if (!pfile->state.in_directive)
-    cpp_error (pfile, CPP_DL_ERROR,
-	       "%qs used outside of preprocessing directive", name);
+    {
+      cpp_error (pfile, CPP_DL_ERROR,
+		 "%qs used outside of preprocessing directive", name);
+      return NULL;
+    }
 
   pfile->state.angled_headers = true;
   const auto sav_padding = pfile->state.directive_wants_padding;
@@ -1995,6 +1998,7 @@ replace_args (cpp_reader *pfile, cpp_hashnode *node, cpp_macro *macro,
   location_t *virt_locs = NULL;
   unsigned int exp_count;
   const line_map_macro *map = NULL;
+  size_t map_idx = 0;
   int track_macro_exp;
 
   /* First, fully macro-expand arguments, calculating the number of
@@ -2105,6 +2109,7 @@ replace_args (cpp_reader *pfile, cpp_hashnode *node, cpp_macro *macro,
       map = linemap_enter_macro (pfile->line_table, node,
 				 expansion_point_loc,
 				 num_macro_tokens);
+      map_idx = map - pfile->line_table->info_macro.maps;
     }
   i = 0;
   vaopt_state vaopt_tracker (pfile, macro->variadic, &args[macro->paramc - 1]);
@@ -2226,6 +2231,11 @@ replace_args (cpp_reader *pfile, cpp_hashnode *node, cpp_macro *macro,
 					 NULL, 0);
 		}
 	    }
+	  else if (vostate == vaopt_state::DROP && map)
+	    /* For the DROP case vaopt_tracker.update (src) can call
+	       expand_arg and that can reallocate the maps, so need to
+	       update the map pointer.  */
+	    map = pfile->line_table->info_macro.maps + map_idx;
 	  continue;
 	}
 

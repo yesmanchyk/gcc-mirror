@@ -272,7 +272,10 @@ omp_discover_declare_target_tgt_fn_r (tree *tp, int *walk_subtrees, void *data)
   else if (TREE_CODE (*tp) == OMP_TARGET)
     {
       tree c = omp_find_clause (OMP_CLAUSES (*tp), OMP_CLAUSE_DEVICE);
-      if (c && OMP_CLAUSE_DEVICE_ANCESTOR (c))
+      tree c2 = omp_find_clause (OMP_CLAUSES (*tp), OMP_CLAUSE_DEVICE_TYPE);
+      if ((c && OMP_CLAUSE_DEVICE_ANCESTOR (c))
+	   || (c2 && (OMP_CLAUSE_DEVICE_TYPE_KIND (c2)
+		      == OMP_CLAUSE_DEVICE_TYPE_HOST)))
 	*walk_subtrees = 0;
     }
   return NULL_TREE;
@@ -286,7 +289,10 @@ omp_discover_declare_target_fn_r (tree *tp, int *walk_subtrees, void *data)
   if (TREE_CODE (*tp) == OMP_TARGET)
     {
       tree c = omp_find_clause (OMP_CLAUSES (*tp), OMP_CLAUSE_DEVICE);
-      if (!c || !OMP_CLAUSE_DEVICE_ANCESTOR (c))
+      tree c2 = omp_find_clause (OMP_CLAUSES (*tp), OMP_CLAUSE_DEVICE_TYPE);
+      if ((!c || !OMP_CLAUSE_DEVICE_ANCESTOR (c))
+	  && (!c2 || (OMP_CLAUSE_DEVICE_TYPE_KIND (c2)
+		      != OMP_CLAUSE_DEVICE_TYPE_HOST)))
 	walk_tree_without_duplicates (&OMP_TARGET_BODY (*tp),
 				      omp_discover_declare_target_tgt_fn_r,
 				      data);
@@ -388,6 +394,29 @@ omp_discover_implicit_declare_target (void)
 				      omp_discover_declare_target_fn_r,
 				      &worklist);
     }
+
+  if (omp_requires_mask
+      & (OMP_REQUIRES_SELF_MAPS | OMP_REQUIRES_UNIFIED_SHARED_MEMORY))
+    FOR_EACH_VARIABLE (vnode)
+      {
+	tree attr;
+	/* If 'self_maps' or 'unified_shared_memory' is enabled,
+	   remove 'enter/to' and add 'link'.
+	   Note that "declare target local" is preserved and not converted.  */
+	if ((attr = lookup_attribute ("omp declare target",
+				      DECL_ATTRIBUTES (vnode->decl)))
+	    && !value_member (get_identifier ("local"), TREE_VALUE (attr)))
+	  {
+	    DECL_ATTRIBUTES (vnode->decl)
+	      = remove_attribute ("omp declare target",
+				  DECL_ATTRIBUTES (vnode->decl));
+	    if (!lookup_attribute ("omp declare target link",
+				   DECL_ATTRIBUTES (vnode->decl)))
+	      DECL_ATTRIBUTES (vnode->decl)
+		= tree_cons (get_identifier ("omp declare target link"),
+			     NULL_TREE, DECL_ATTRIBUTES (vnode->decl));
+	  }
+      }
 
   lang_hooks.decls.omp_finish_decl_inits ();
 }

@@ -313,10 +313,10 @@ struct GTY((desc("0"), tag("0"),
 	    chain_next ("RTX_NEXT (&%h)"),
 	    chain_prev ("RTX_PREV (&%h)"))) rtx_def {
   /* The kind of value the expression has.  */
-  ENUM_BITFIELD(machine_mode) mode : MACHINE_MODE_BITSIZE;
+  machine_mode mode : MACHINE_MODE_BITSIZE;
 
   /* The kind of expression this is.  */
-  ENUM_BITFIELD(rtx_code) code: RTX_CODE_BITSIZE;
+  enum rtx_code code: RTX_CODE_BITSIZE;
 
   /* 1 in a MEM if we should keep the alias set for this mem unchanged
      when we access a component.
@@ -425,6 +425,9 @@ struct GTY((desc("0"), tag("0"),
     /* In a CONST_WIDE_INT (aka hwivec_def), this is the number of
        HOST_WIDE_INTs in the hwivec_def.  */
     unsigned int num_elem;
+
+    /* The unique identifier of a VALUE rtx.  */
+    int value_uid;
 
     /* Information about a CONST_VECTOR.  */
     struct
@@ -1625,6 +1628,10 @@ jump_table_for_label (const rtx_code_label *label)
    This is a "struct cselib_val", see cselib.h.  */
 #define CSELIB_VAL_PTR(RTX) X0CSELIB (RTX, 0)
 
+/* A VALUE's unique identifier.  */
+#define CSELIB_VAL_UID(RTX) \
+  RTL_FLAG_CHECK1 ("CSELIB_VAL_UID", (RTX), VALUE)->u2.value_uid
+
 /* Holds a list of notes on what this insn does to various REGs.
    It is a chain of EXPR_LIST rtx's, where the second operand is the
    chain pointer and the first operand is the REG being described.
@@ -2223,6 +2230,10 @@ struct address_info {
 
   /* True if this is an RTX_AUTOINC address.  */
   bool autoinc_p;
+
+  /* The MEM whose address this is, or null if this describes an address
+     operand with no enclosing MEM (an ADDRESS rather than a MEM address).  */
+  rtx mem;
 
   /* A pointer to the top-level address.  */
   rtx *outer;
@@ -3073,6 +3084,7 @@ enum class expand_opcode {
 
 extern rtx expand_rtx (const uint8_t *, rtx *);
 extern rtx_insn *complete_seq (const uint8_t *, rtx *);
+extern void note_split (const char *);
 extern rtx copy_rtx_if_shared (rtx);
 
 /* In rtl.cc */
@@ -3085,7 +3097,7 @@ extern bool rtx_equal_p (const_rtx, const_rtx,
 			 rtx_equal_p_callback_function = NULL);
 
 extern bool rtvec_all_equal_p (const_rtvec);
-extern bool rtvec_series_p (rtvec, int);
+extern bool rtvec_series_p (rtvec, poly_int64);
 
 /* Return true if X is a vector constant with a duplicated element value.  */
 
@@ -4015,8 +4027,6 @@ extern struct target_rtl *this_target_rtl;
   (this_target_rtl->x_top_of_stack)
 #define mode_mem_attrs \
   (this_target_rtl->x_mode_mem_attrs)
-#define static_reg_base_value \
-  (this_target_rtl->x_static_reg_base_value)
 
 /* All references to certain hard regs, except those created
    by allocating pseudo regs into them (when that's possible),

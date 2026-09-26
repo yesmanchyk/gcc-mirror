@@ -93,11 +93,9 @@ cobol1_OBJS =    \
 # on all of the libgcobol/*.h files, which might lead to the occasional
 # unnecessary compilation.  The impact of that is negligible.
 #
-# Various #includes in the files copied from gcc/libgcobol need to be modified
-# so that the .h files can be found.
 
 cobol/charmaps.cc cobol/valconv.cc: cobol/%.cc: $(LIB_SOURCE)/%.cc
-	sed -e '/^#include/s,"\([^"]*[^g"].h\)","../../libgcobol/\1",' $^ > $@
+	cp $^ $@
 
 LIB_SOURCE_H=$(wildcard $(LIB_SOURCE)/*.h)
 
@@ -161,15 +159,8 @@ cobol/cdf.cc: cobol/cdf.y
 	$(BISON) -o $@ $(YFLAGS)						\
 		--defines=cobol/cdf.h --report-file=cobol/cdf.out $<
 
-# See "Trailing context is getting confused with trailing optional patterns"
-# in Flex manual. We suppress those messages, as a convenience.
-FLEX_WARNING = warning, dangerous trailing context
-
 cobol/scan.cc: cobol/scan.l
-	$(FLEX) -o$@ $(LFLAGS) $< 2>$@~ || { cat $@~ >&1; exit 1; }
-	awk  '! /$(FLEX_WARNING)/ {print > "/dev/stderr"; nerr++}	\
-	     END {print "$(FLEX):", NR, "messages" > "/dev/stderr"}' $@~
-
+	$(FLEX) -o$@ $(LFLAGS) $<
 
 # To establish prerequisites for parse.o, cdf.o, and scan.o,
 #   1. capture the "make -n" output

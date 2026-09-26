@@ -790,6 +790,9 @@ decode_oacc_directive (void)
     case 'h':
       matcha ("host_data", gfc_match_oacc_host_data, ST_OACC_HOST_DATA);
       break;
+    case 'i':
+      matcha ("init", gfc_match_oacc_init, ST_OACC_INIT);
+      break;
     case 'p':
       matcha ("parallel loop", gfc_match_oacc_parallel_loop,
 	      ST_OACC_PARALLEL_LOOP);
@@ -806,6 +809,8 @@ decode_oacc_directive (void)
     case 's':
       matcha ("serial loop", gfc_match_oacc_serial_loop, ST_OACC_SERIAL_LOOP);
       matcha ("serial", gfc_match_oacc_serial, ST_OACC_SERIAL);
+      matcha ("set", gfc_match_oacc_set, ST_OACC_SET);
+      matcha ("shutdown", gfc_match_oacc_shutdown, ST_OACC_SHUTDOWN);
       break;
     case 'u':
       matcha ("update", gfc_match_oacc_update, ST_OACC_UPDATE);
@@ -1044,13 +1049,23 @@ decode_omp_directive (void)
     case 'd':
       matchdo ("declare mapper", gfc_match_omp_declare_mapper,
 	       ST_OMP_DECLARE_MAPPER);
+      matchdo ("declare_mapper", gfc_match_omp_declare_mapper,
+	       ST_OMP_DECLARE_MAPPER);
       matchds ("declare reduction", gfc_match_omp_declare_reduction,
+	       ST_OMP_DECLARE_REDUCTION);
+      matchds ("declare_reduction", gfc_match_omp_declare_reduction,
 	       ST_OMP_DECLARE_REDUCTION);
       matchds ("declare simd", gfc_match_omp_declare_simd,
 	       ST_OMP_DECLARE_SIMD);
+      matchds ("declare_simd", gfc_match_omp_declare_simd,
+	       ST_OMP_DECLARE_SIMD);
       matchdo ("declare target", gfc_match_omp_declare_target,
 	       ST_OMP_DECLARE_TARGET);
+      matchdo ("declare_target", gfc_match_omp_declare_target,
+	       ST_OMP_DECLARE_TARGET);
       matchdo ("declare variant", gfc_match_omp_declare_variant,
+	       ST_OMP_DECLARE_VARIANT);
+      matchdo ("declare_variant", gfc_match_omp_declare_variant,
 	       ST_OMP_DECLARE_VARIANT);
       break;
     case 'e':
@@ -1110,6 +1125,8 @@ decode_omp_directive (void)
       break;
     case 'c':
       matcho ("cancellation% point", gfc_match_omp_cancellation_point,
+	      ST_OMP_CANCELLATION_POINT);
+      matcho ("cancellation_point", gfc_match_omp_cancellation_point,
 	      ST_OMP_CANCELLATION_POINT);
       matcho ("cancel", gfc_match_omp_cancel, ST_OMP_CANCEL);
       matcho ("critical", gfc_match_omp_critical, ST_OMP_CRITICAL);
@@ -1181,6 +1198,7 @@ decode_omp_directive (void)
       matcho ("end sections", gfc_match_omp_end_nowait, ST_OMP_END_SECTIONS);
       matcho ("end single", gfc_match_omp_end_single, ST_OMP_END_SINGLE);
       matcho ("end target data", gfc_match_omp_eos_error, ST_OMP_END_TARGET_DATA);
+      matcho ("end target_data", gfc_match_omp_eos_error, ST_OMP_END_TARGET_DATA);
       matchs ("end target parallel do simd", gfc_match_omp_end_nowait,
 	      ST_OMP_END_TARGET_PARALLEL_DO_SIMD);
       matcho ("end target parallel do", gfc_match_omp_end_nowait,
@@ -1301,9 +1319,14 @@ decode_omp_directive (void)
       break;
     case 't':
       matcho ("target data", gfc_match_omp_target_data, ST_OMP_TARGET_DATA);
+      matcho ("target_data", gfc_match_omp_target_data, ST_OMP_TARGET_DATA);
       matcho ("target enter data", gfc_match_omp_target_enter_data,
 	      ST_OMP_TARGET_ENTER_DATA);
+      matcho ("target_enter_data", gfc_match_omp_target_enter_data,
+	      ST_OMP_TARGET_ENTER_DATA);
       matcho ("target exit data", gfc_match_omp_target_exit_data,
+	      ST_OMP_TARGET_EXIT_DATA);
+      matcho ("target_exit_data", gfc_match_omp_target_exit_data,
 	      ST_OMP_TARGET_EXIT_DATA);
       matchs ("target parallel do simd", gfc_match_omp_target_parallel_do_simd,
 	      ST_OMP_TARGET_PARALLEL_DO_SIMD);
@@ -1329,6 +1352,8 @@ decode_omp_directive (void)
 	      ST_OMP_TARGET_TEAMS_LOOP);
       matcho ("target teams", gfc_match_omp_target_teams, ST_OMP_TARGET_TEAMS);
       matcho ("target update", gfc_match_omp_target_update,
+	      ST_OMP_TARGET_UPDATE);
+      matcho ("target_update", gfc_match_omp_target_update,
 	      ST_OMP_TARGET_UPDATE);
       matcho ("target", gfc_match_omp_target, ST_OMP_TARGET);
       matcho ("taskgroup", gfc_match_omp_taskgroup, ST_OMP_TASKGROUP);
@@ -1975,7 +2000,8 @@ next_statement (void)
   case ST_FORM_TEAM: case ST_SYNC_TEAM: \
   case ST_EVENT_POST: case ST_EVENT_WAIT: case ST_FAIL_IMAGE: \
   case ST_OACC_UPDATE: case ST_OACC_WAIT: case ST_OACC_CACHE: \
-  case ST_OACC_ENTER_DATA: case ST_OACC_EXIT_DATA
+  case ST_OACC_ENTER_DATA: case ST_OACC_EXIT_DATA: \
+  case ST_OACC_INIT: case ST_OACC_SHUTDOWN: case ST_OACC_SET
 
 /* Statements that mark other executable statements.  */
 
@@ -2123,7 +2149,7 @@ gfc_find_state (gfc_compile_state state)
     if (p->state == state)
       break;
 
-  return (p == NULL) ? false : true;
+  return p != NULL;
 }
 
 
@@ -2692,6 +2718,15 @@ gfc_ascii_statement (gfc_statement st, bool strip_sentinel)
     case ST_OACC_END_ATOMIC:
       p = "!$ACC END ATOMIC";
       break;
+    case ST_OACC_INIT:
+      p = "!ACC INIT";
+      break;
+    case ST_OACC_SHUTDOWN:
+      p = "!ACC SHUTDOWN";
+      break;
+    case ST_OACC_SET:
+      p = "!ACC SET";
+      break;
     case ST_OMP_ALLOCATE:
     case ST_OMP_ALLOCATE_EXEC:
       p = "!$OMP ALLOCATE";
@@ -3238,8 +3273,32 @@ accept_statement (gfc_statement st)
     case ST_END_SUBROUTINE:
       if (gfc_statement_label != NULL)
 	{
-	  new_st.op = EXEC_RETURN;
-	  add_statement ();
+	  /* After a contains section, a new namespace is started together with
+	     a new state_stack. The statement label must be attached to the
+	     previous state after finding the label in its namespace.  */
+	  if (gfc_state_stack->head == NULL
+	      && gfc_state_stack->previous
+	      && gfc_state_stack->previous->sym
+	      && gfc_state_stack->previous->sym->ns
+	      && gfc_state_stack->previous->sym->ns->parent == NULL)
+	    {
+	      int value = gfc_current_ns->st_labels->value;
+	      gfc_state_data *previous_state = gfc_state_stack;
+	      gfc_namespace *old_ns = gfc_current_ns;
+	      gfc_current_ns = gfc_state_stack->previous->sym->ns;
+	      new_st.here = gfc_get_st_label (value);
+	      new_st.here->defined = ST_LABEL_TARGET;
+	      new_st.op = EXEC_RETURN;
+	      gfc_state_stack = gfc_state_stack->previous;
+	      add_statement ();
+	      gfc_state_stack = previous_state;
+	      gfc_current_ns = old_ns;
+	    }
+	  else
+	   {
+	     new_st.op = EXEC_RETURN;
+	     add_statement ();
+	   }
 	}
       else
 	{
@@ -3269,9 +3328,7 @@ accept_statement (gfc_statement st)
 }
 
 
-/* Undo anything tentative that has been built for the current statement,
-   except if a gfc_charlen structure has been added to current namespace's
-   list of gfc_charlen structure.  */
+/* Undo anything tentative that has been built for the current statement.  */
 
 static void
 reject_statement (void)
@@ -5567,12 +5624,28 @@ loop:
   pop_state ();
 }
 
+
+/* F2018(11.1.5.2): Track coarrays allocated within CHANGE TEAM blocks.
+   Map from team namespace to vector of allocated coarray symbols.  */
+hash_map<gfc_namespace *, vec<gfc_expr *>> team_allocated_coarrays;
+
+/* Stack to track current CHANGE TEAM context.  */
+vec<gfc_namespace *> team_context_stack;
+
+gfc_namespace *
+get_current_team_context (void)
+{
+  return team_context_stack.is_empty () ? NULL : team_context_stack.last ();
+}
+
+
 static void
 parse_change_team (void)
 {
   gfc_namespace *my_ns;
   gfc_state_data s;
   gfc_statement st;
+  vec<gfc_expr *> *team_allocs;
 
   gfc_notify_std (GFC_STD_F2018, "CHANGE TEAM construct at %C");
 
@@ -5590,6 +5663,9 @@ parse_change_team (void)
   accept_statement (ST_CHANGE_TEAM);
   push_state (&s, COMP_CHANGE_TEAM, my_ns->proc_name);
 
+  /* Push team context for tracking coarrays allocated in a team block.  */
+  team_context_stack.safe_push (gfc_current_ns);
+
 loop:
   st = parse_executable (ST_NONE);
   switch (st)
@@ -5600,6 +5676,13 @@ loop:
     case_end:
       accept_statement (st);
       my_ns->code = gfc_state_stack->head;
+      /* F2018(11.1.5.2): Deallocate coarray expressions allocated in this
+	 team block,  */
+      team_allocs = team_allocated_coarrays.get (gfc_current_ns);
+      if (team_allocs)
+	deallocate_allocated_coarrays (team_allocs);
+      /* Pop team context.  */
+      team_context_stack.pop ();
       break;
 
     default:
@@ -8039,6 +8122,9 @@ is_oacc (gfc_state_data *sd)
     case EXEC_OACC_EXIT_DATA:
     case EXEC_OACC_ATOMIC:
     case EXEC_OACC_ROUTINE:
+    case EXEC_OACC_INIT:
+    case EXEC_OACC_SHUTDOWN:
+    case EXEC_OACC_SET:
       return true;
 
     default:

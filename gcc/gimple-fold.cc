@@ -1478,10 +1478,70 @@ gimple_fold_builtin_memset (gimple_stmt_iterator *gsi, tree c, tree len)
   if (! tree_fits_uhwi_p (len))
     return false;
 
+  length = tree_to_uhwi (len);
+
+  tree dest = gimple_call_arg (stmt, 0);
+  if (length == 1
+      && POINTER_TYPE_P (TREE_TYPE (dest)))
+    {
+      /* Keep the original call until object-size analysis has inspected it.  */
+      if (!(cfun->curr_properties & PROP_objsz))
+	return false;
+
+      /* Detect out-of-bounds accesses without issuing warnings.
+	 Avoid folding out-of-bounds accesses but to avoid false
+	 positives for unreachable code defer warning until after
+	 DCE has worked its magic.
+	 -Wrestrict is still diagnosed.  */
+      if (int warning = check_bounds_or_overlap (as_a <gcall *>(stmt),
+						 dest, NULL_TREE, len,
+						 NULL_TREE, false, false))
+	if (warning != OPT_Wrestrict)
+	  return false;
+
+      etype = unsigned_char_type_node;
+      tree ptype = TREE_TYPE (TREE_TYPE (dest));
+      if (TYPE_VOLATILE (ptype))
+	etype = build_qualified_type (etype, TYPE_QUAL_VOLATILE);
+
+      location_t loc = gimple_location (stmt);
+      tree cval_tree;
+      if (TREE_CODE (c) == INTEGER_CST)
+	cval_tree = fold_convert (etype, c);
+      else
+	cval_tree = gimple_convert (gsi, true, GSI_SAME_STMT, loc, etype, c);
+
+      /* Build accesses at offset zero with a ref-all character type.  */
+      tree off0
+	= build_int_cst (build_pointer_type_for_mode (char_type_node,
+						      ptr_mode, true), 0);
+      tree var = fold_build2_loc (loc, MEM_REF, etype, dest, off0);
+      gimple *store = gimple_build_assign (var, cval_tree);
+      gimple_move_vops (store, stmt);
+      gimple_set_location (store, loc);
+      copy_warning (store, stmt);
+
+      tree lhs = gimple_call_lhs (stmt);
+      if (!lhs)
+	{
+	  gsi_replace (gsi, store, false);
+	  return true;
+	}
+
+      gsi_insert_before (gsi, store, GSI_SAME_STMT);
+      tree ret = dest;
+      if (!useless_type_conversion_p (TREE_TYPE (lhs), TREE_TYPE (dest)))
+	ret = gimple_convert (gsi, true, GSI_SAME_STMT, loc,
+			      TREE_TYPE (lhs), dest);
+      gimple *asgn = gimple_build_assign (lhs, ret);
+      gsi_replace (gsi, asgn, false);
+
+      return true;
+    }
+
   if (TREE_CODE (c) != INTEGER_CST)
     return false;
 
-  tree dest = gimple_call_arg (stmt, 0);
   tree var = dest;
   if (TREE_CODE (var) != ADDR_EXPR)
     return false;
@@ -1502,7 +1562,6 @@ gimple_fold_builtin_memset (gimple_stmt_iterator *gsi, tree c, tree len)
   if (! var_decl_component_p (var))
     return false;
 
-  length = tree_to_uhwi (len);
   if (GET_MODE_SIZE (SCALAR_INT_TYPE_MODE (etype)) != length
       || (GET_MODE_PRECISION (SCALAR_INT_TYPE_MODE (etype))
 	  != GET_MODE_BITSIZE (SCALAR_INT_TYPE_MODE (etype)))
@@ -3038,6 +3097,48 @@ gimple_fold_builtin_fputs (gimple_stmt_iterator *gsi,
     default:
       gcc_unreachable ();
     }
+}
+
+/* Fold a call to fwrite (PTR, SIZE, N, STREAM) at *GSI.  UNLOCKED says whether
+   the callee is fwrite_unlocked rather than fwrite.  A call that transfers a
+   single byte and whose result is nobody's business writes the same byte as
+   fputc (*PTR, STREAM), which reaches the stream without going through the
+   generic buffered-write path.  Return true if the call was folded.  */
+
+static bool
+gimple_fold_builtin_fwrite (gimple_stmt_iterator *gsi, bool unlocked)
+{
+  gimple *stmt = gsi_stmt (*gsi);
+
+  /* fwrite reports the number of items transferred and fputc the character
+     written, so only fold when nothing looks at the result.  */
+  if (gimple_call_lhs (stmt))
+    return false;
+
+  /* fwrite transfers SIZE * N bytes, so writing a single byte needs both
+     counts to be one: no other pair of non-negative values multiplies to
+     one.  */
+  if (!integer_onep (gimple_call_arg (stmt, 1))
+      || !integer_onep (gimple_call_arg (stmt, 2)))
+    return false;
+
+  /* If we're using an unlocked function, assume the other unlocked
+     functions exist explicitly.  */
+  tree const fn_fputc = (unlocked
+			 ? builtin_decl_explicit (BUILT_IN_FPUTC_UNLOCKED)
+			 : builtin_decl_implicit (BUILT_IN_FPUTC));
+  if (!fn_fputc || (!gimple_vdef (stmt) && gimple_in_ssa_p (cfun)))
+    return false;
+
+  location_t loc = gimple_location (stmt);
+  gimple_seq stmts = NULL;
+  tree byte = gimple_load_first_char (loc, gimple_call_arg (stmt, 0), &stmts);
+  tree c = gimple_convert (&stmts, integer_type_node, byte);
+  tree stream = gimple_call_arg (stmt, 3);
+  gcall *repl = gimple_build_call (fn_fputc, 2, c, stream);
+  gimple_seq_add_stmt_without_update (&stmts, repl);
+  gsi_replace_with_seq_vops (gsi, stmts);
+  return true;
 }
 
 /* Fold a call to the __mem{cpy,pcpy,move,set}_chk builtin.
@@ -5524,6 +5625,10 @@ gimple_fold_builtin (gimple_stmt_iterator *gsi)
     case BUILT_IN_FPUTS_UNLOCKED:
       return gimple_fold_builtin_fputs (gsi, gimple_call_arg (stmt, 0),
 					gimple_call_arg (stmt, 1), true);
+    case BUILT_IN_FWRITE:
+      return gimple_fold_builtin_fwrite (gsi, false);
+    case BUILT_IN_FWRITE_UNLOCKED:
+      return gimple_fold_builtin_fwrite (gsi, true);
     case BUILT_IN_MEMCPY_CHK:
     case BUILT_IN_MEMPCPY_CHK:
     case BUILT_IN_MEMMOVE_CHK:
@@ -5879,7 +5984,7 @@ partial_load_store_mask_state (gcall *call, tree vectype)
   if (len && poly_int_tree_p (len))
     {
       gcc_assert (TREE_CODE (bias) == INTEGER_CST);
-      wlen = wi::to_poly_widest (len) + wi::to_widest (bias);
+      wlen = wi::to_poly_widest (len) - wi::to_widest (bias);
 
       if (known_eq (wlen, 0))
 	return MASK_ALL_INACTIVE;
@@ -7618,17 +7723,18 @@ follow_outer_ssa_edges (tree val)
 	      && (def_bb == fosa_bb
 		  || dominated_by_p (CDI_DOMINATORS, fosa_bb, def_bb))))
 	return val;
-      /* We cannot temporarily rewrite stmts with undefined overflow
-	 behavior, so avoid expanding them.  */
-      if ((ANY_INTEGRAL_TYPE_P (TREE_TYPE (val))
-	   || POINTER_TYPE_P (TREE_TYPE (val)))
-	  && !TYPE_OVERFLOW_WRAPS (TREE_TYPE (val)))
-	return NULL_TREE;
       flow_sensitive_info_storage storage;
       storage.save_and_clear (val);
       /* If the definition does not dominate fosa_bb temporarily reset
 	 flow-sensitive info.  */
       fosa_unwind->safe_push (std::make_pair (val, storage));
+      /* We cannot temporarily rewrite stmts with undefined overflow
+	 behavior, so avoid expanding them. But still save off the
+	 flow-sensitive info as we might be using the ssa name as the leaf.  */
+      if ((ANY_INTEGRAL_TYPE_P (TREE_TYPE (val))
+	   || POINTER_TYPE_P (TREE_TYPE (val)))
+	  && !TYPE_OVERFLOW_WRAPS (TREE_TYPE (val)))
+	return NULL_TREE;
       return val;
     }
   return val;
@@ -10854,10 +10960,12 @@ arith_code_with_undefined_signed_overflow (tree_code code)
    integer types involves undefined behavior on overflow and the
    operation can be expressed with unsigned arithmetic.
    Also returns true if STMT is a VCE that needs to be rewritten
-   if moved to be executed unconditionally.   */
+   if moved to be executed unconditionally.
+   SHIFT_COUNT additionally asks for a shift or rotate whose count may be
+   out of range; rewrite_to_defined_unconditional reduces such a count.  */
 
 bool
-gimple_needing_rewrite_undefined (gimple *stmt)
+gimple_needing_rewrite_undefined (gimple *stmt, bool shift_count)
 {
   if (!is_gimple_assign (stmt))
     return false;
@@ -10892,10 +11000,22 @@ gimple_needing_rewrite_undefined (gimple *stmt)
       && TYPE_PRECISION (lhs_type)
 	  < TYPE_PRECISION (TREE_TYPE (TREE_OPERAND (rhs, 0))))
     return true;
+  /* A shift or rotate by a count that may be out of range; the count can
+     be reduced into range.  */
+  enum tree_code code = gimple_assign_rhs_code (stmt);
+  if (shift_count
+      && (code == LSHIFT_EXPR
+	  || code == RSHIFT_EXPR
+	  || code == LROTATE_EXPR
+	  || code == RROTATE_EXPR)
+      && INTEGRAL_TYPE_P (lhs_type)
+      && (TREE_CODE (gimple_assign_rhs2 (stmt)) != INTEGER_CST
+	  || wi::geu_p (wi::to_wide (gimple_assign_rhs2 (stmt)),
+			TYPE_PRECISION (lhs_type))))
+    return true;
   if (!TYPE_OVERFLOW_UNDEFINED (lhs_type))
     return false;
-  if (!arith_code_with_undefined_signed_overflow
-	(gimple_assign_rhs_code (stmt)))
+  if (!arith_code_with_undefined_signed_overflow (code))
     return false;
   return true;
 }
@@ -10914,7 +11034,7 @@ static gimple_seq
 rewrite_to_defined_unconditional (gimple_stmt_iterator *gsi, gimple *stmt,
 				  bool in_place)
 {
-  gcc_assert (gimple_needing_rewrite_undefined (stmt));
+  gcc_assert (gimple_needing_rewrite_undefined (stmt, true));
   if (dump_file && (dump_flags & TDF_DETAILS))
     {
       fprintf (dump_file, "rewriting stmt for being unconditional defined");
@@ -10991,6 +11111,36 @@ rewrite_to_defined_unconditional (gimple_stmt_iterator *gsi, gimple *stmt,
 	  gimple_set_modified (stmt, true);
 	  gimple_seq_add_stmt (&stmts, stmt);
 	}
+      return stmts;
+    }
+  /* Reduce a shift or rotate count into range.  The mask keeps the count's
+     own type where that holds PREC - 1, so that a SHIFT_COUNT_TRUNCATED
+     target folds it away; MIN needs an unsigned count so a negative one
+     clamps.  */
+  enum tree_code code = gimple_assign_rhs_code (stmt);
+  if (code == LSHIFT_EXPR
+      || code == RSHIFT_EXPR
+      || code == LROTATE_EXPR
+      || code == RROTATE_EXPR)
+    {
+      unsigned prec = TYPE_PRECISION (TREE_TYPE (lhs));
+      bool pow2 = pow2p_hwi (prec);
+      tree count = gimple_assign_rhs2 (stmt);
+      tree type = TREE_TYPE (count);
+      if (!pow2 || wi::ltu_p (wi::max_value (type), prec - 1))
+	type = unsigned_type_node;
+      count = gimple_convert (&stmts, type, count);
+      count = gimple_build (&stmts, pow2 ? BIT_AND_EXPR : MIN_EXPR, type,
+			    count, build_int_cst (type, prec - 1));
+      gimple_assign_set_rhs2 (stmt, count);
+      gimple_set_modified (stmt, true);
+      if (in_place)
+	{
+	  gsi_insert_seq_before (gsi, stmts, GSI_SAME_STMT);
+	  update_stmt (stmt);
+	  return NULL;
+	}
+      gimple_seq_add_stmt (&stmts, stmt);
       return stmts;
     }
   tree type = unsigned_type_for (TREE_TYPE (lhs));

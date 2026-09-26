@@ -859,6 +859,8 @@ enable_gcov
 enable_shared
 enable_fixed_point
 enable_decimal_float
+DEFAULT_INSNATTRTAB_PARTITIONS
+DEFAULT_INSNRECOG_PARTITIONS
 DEFAULT_INSNEMIT_PARTITIONS
 DEFAULT_MATCHPD_PARTITIONS
 with_multi_buildlist
@@ -987,6 +989,7 @@ enable_multilib
 enable_multiarch
 with_stack_clash_protection_guard_size
 with_matchpd_partitions
+with_md_generator_partitions
 with_insnemit_partitions
 enable___cxa_atexit
 enable_decimal_float
@@ -1881,9 +1884,12 @@ Optional Packages:
   --with-matchpd-partitions=num
                           Set the number of partitions to make for gimple and
                           generic when splitting match.pd. [default=10]
-  --with-insnemit-partitions=num
-                          Set the number of partitions of insn-emit.cc for
-                          genemit and genrecog to create. [default=10]
+  --with-md-generator-partitions=num|emit:recog:attrtab
+                          Set the partition counts used by genemit, genrecog
+                          and genattrtab. A single number sets all three
+                          counts. [default=target dependent]
+  --with-insnemit-partitions=num|emit:recog:attrtab
+                          Deprecated alias for --with-md-generator-partitions.
   --with-dwarf2           force the default debug format to be DWARF 2 (or
                           later)
   --with-specs=SPECS      add SPECS to driver command-line processing
@@ -7907,18 +7913,31 @@ fi
 
 
 
-# Specify the number of splits of insn-emit.cc and insn-recog.cc to generate.
+# Specify the number of output partitions used by the machine-description
+# generators.  Select and validate the effective value after config.gcc has
+# supplied the target default.
+md_generator_partitions_set=no
+md_generator_partitions_legacy=no
+
+# Check whether --with-md-generator-partitions was given.
+if test "${with_md_generator_partitions+set}" = set; then :
+  withval=$with_md_generator_partitions; md_generator_partitions=$with_md_generator_partitions
+md_generator_partitions_set=yes
+fi
+
 
 # Check whether --with-insnemit-partitions was given.
 if test "${with_insnemit_partitions+set}" = set; then :
-  withval=$with_insnemit_partitions; DEFAULT_INSNEMIT_PARTITIONS="$with_insnemit_partitions"
-else
-  DEFAULT_INSNEMIT_PARTITIONS=10
+  withval=$with_insnemit_partitions; if test "$md_generator_partitions_set" = yes; then
+  as_fn_error $? "--with-md-generator-partitions and --with-insnemit-partitions cannot be used together." "$LINENO" 5
+fi
+md_generator_partitions=$with_insnemit_partitions
+md_generator_partitions_set=yes
+md_generator_partitions_legacy=yes
 fi
 
-if (test $DEFAULT_INSNEMIT_PARTITIONS -lt 1); then
-  as_fn_error $? "Invalid value $DEFAULT_INSNEMIT_PARTITIONS for --with-insnemit-partitions. Cannot be negative." "$LINENO" 5
-fi
+
+
 
 
 
@@ -12993,6 +13012,53 @@ target_gtfiles=
 
 # Collect target-machine-specific information.
 . ${srcdir}/config.gcc || exit 1
+
+# Use the target default unless the user specified an option.
+if test "$md_generator_partitions_set" = no; then
+  md_generator_partitions=$default_md_generator_partitions
+fi
+
+# Set all three counts here and let the loop below reject anything that is
+# empty, not a number, or out of range.  A value with too many fields leaves
+# its remainder in the last count, where the colon fails the same check.
+case "$md_generator_partitions" in
+  *:*:*)
+    IFS=: read -r DEFAULT_INSNEMIT_PARTITIONS DEFAULT_INSNRECOG_PARTITIONS \
+      DEFAULT_INSNATTRTAB_PARTITIONS <<EOF
+$md_generator_partitions
+EOF
+    ;;
+  *)
+    DEFAULT_INSNEMIT_PARTITIONS=$md_generator_partitions
+    DEFAULT_INSNRECOG_PARTITIONS=$md_generator_partitions
+    DEFAULT_INSNATTRTAB_PARTITIONS=$md_generator_partitions
+    ;;
+esac
+
+for generator_partitions in \
+  "$DEFAULT_INSNEMIT_PARTITIONS" \
+  "$DEFAULT_INSNRECOG_PARTITIONS" \
+  "$DEFAULT_INSNATTRTAB_PARTITIONS"; do
+  case "$generator_partitions" in
+    '' | *[!0-9]*) generator_partitions= ;;
+    *)
+      while test "${generator_partitions#0}" != "$generator_partitions"; do
+        generator_partitions=${generator_partitions#0}
+      done
+      case "$generator_partitions" in
+        '' | ?????*) generator_partitions= ;;
+      esac
+      ;;
+  esac
+  if test -z "$generator_partitions"; then
+    as_fn_error $? "Invalid machine-description generator partition value $md_generator_partitions. Use N or E:R:A, with each number between 1 and 9999." "$LINENO" 5
+  fi
+done
+
+if test "$md_generator_partitions_legacy" = yes; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: --with-insnemit-partitions is deprecated. Use --with-md-generator-partitions instead." >&5
+$as_echo "$as_me: WARNING: --with-insnemit-partitions is deprecated. Use --with-md-generator-partitions instead." >&2;}
+fi
 
 extra_objs="${host_extra_objs} ${extra_objs}"
 extra_gcc_objs="${host_extra_gcc_objs} ${extra_gcc_objs}"
@@ -21921,7 +21987,7 @@ else
   lt_dlunknown=0; lt_dlno_uscore=1; lt_dlneed_uscore=2
   lt_status=$lt_dlunknown
   cat > conftest.$ac_ext <<_LT_EOF
-#line 21924 "configure"
+#line 21990 "configure"
 #include "confdefs.h"
 
 #if HAVE_DLFCN_H
@@ -22027,7 +22093,7 @@ else
   lt_dlunknown=0; lt_dlno_uscore=1; lt_dlneed_uscore=2
   lt_status=$lt_dlunknown
   cat > conftest.$ac_ext <<_LT_EOF
-#line 22030 "configure"
+#line 22096 "configure"
 #include "confdefs.h"
 
 #if HAVE_DLFCN_H
@@ -26608,10 +26674,10 @@ else
 fi
 
 
+gcc_cv_irelative_reloc=
 case "${target}" in
   riscv*-*-linux*)
-    { $as_echo "$as_me:${as_lineno-$LINENO}: checking linker ifunc IRELATIVE support" >&5
-$as_echo_n "checking linker ifunc IRELATIVE support... " >&6; }
+    gcc_cv_irelative_reloc=R_RISCV_IRELATIVE
     cat > conftest.s <<EOF
 	.text
 	.type	foo_resolver, @function
@@ -26630,20 +26696,48 @@ bar:
 	ret
 	.size	bar, .-bar
 EOF
-    if test x"$gcc_cv_as" != x \
-       && test x"$gcc_cv_ld" != x \
-       && test x"$gcc_cv_readelf" != x \
-       && $gcc_cv_as -o conftest.o conftest.s > /dev/null 2>&1 \
-       && $gcc_cv_ld -o conftest conftest.o > /dev/null 2>&1 \
-       && $gcc_cv_readelf --relocs --wide conftest \
-	  | grep R_RISCV_IRELATIVE > /dev/null 2>&1; then
-      enable_gnu_indirect_function=yes
-    fi
-    rm -f conftest conftest.o conftest.s
-    { $as_echo "$as_me:${as_lineno-$LINENO}: result: $enable_gnu_indirect_function" >&5
-$as_echo "$enable_gnu_indirect_function" >&6; }
+    ;;
+  alpha*-*-linux*)
+    # Alpha gas reserves .set for setting assembler modes, so the alias is
+    # spelled with '=' instead, matching the target's ASM_OUTPUT_DEF.
+    gcc_cv_irelative_reloc=R_ALPHA_IRELATIVE
+    cat > conftest.s <<EOF
+	.text
+	.type	foo_resolver, @function
+foo_resolver:
+	ret
+	.size	foo_resolver, .-foo_resolver
+
+	.globl	foo
+	.type	foo, %gnu_indirect_function
+	foo = foo_resolver
+
+	.globl	bar
+	.type	bar, @function
+bar:
+	jsr	\$26, foo
+	ret
+	.size	bar, .-bar
+EOF
     ;;
 esac
+
+if test x"$gcc_cv_irelative_reloc" != x; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking linker ifunc IRELATIVE support" >&5
+$as_echo_n "checking linker ifunc IRELATIVE support... " >&6; }
+  if test x"$gcc_cv_as" != x \
+     && test x"$gcc_cv_ld" != x \
+     && test x"$gcc_cv_readelf" != x \
+     && $gcc_cv_as -o conftest.o conftest.s > /dev/null 2>&1 \
+     && $gcc_cv_ld -o conftest conftest.o > /dev/null 2>&1 \
+     && $gcc_cv_readelf --relocs --wide conftest \
+	| grep $gcc_cv_irelative_reloc > /dev/null 2>&1; then
+    enable_gnu_indirect_function=yes
+  fi
+  rm -f conftest conftest.o conftest.s
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $enable_gnu_indirect_function" >&5
+$as_echo "$enable_gnu_indirect_function" >&6; }
+fi
 
 gif=`if test x$enable_gnu_indirect_function = xyes; then echo 1; else echo 0; fi`
 
@@ -26807,8 +26901,8 @@ $as_echo "#define HAVE_GAS_HIDDEN 1" >>confdefs.h
 
 fi
 
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking linker supports GNU style respones files" >&5
-$as_echo_n "checking linker supports GNU style respones files... " >&6; }
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking linker supports GNU style response files" >&5
+$as_echo_n "checking linker supports GNU style response files... " >&6; }
 gcc_cv_ld_at_file=no
 if test $in_tree_ld = yes ; then
   gcc_cv_ld_at_file=yes
@@ -27244,6 +27338,14 @@ else
   test $ac_status = 0; }; }
     then
 	case "$target" in
+  hppa*-*-hpux*)
+    # The HP dynamic linker relocates text and data separately, so
+    # differences between text and data don't work.  As a result,
+    # gas defines CFI_DIFF_EXPR_OK to 0.  We want to use difference
+    # expressions for symbols in the data segment, so we need to
+    # make sure CFI directives aren't emitted.
+    gcc_cv_as_cfi_directive=no
+    ;;
   *-*-solaris*)
     # If the linker used on Solaris (like Sun ld) isn't capable of merging
     # read-only and read-write sections, we need to make sure that the
@@ -28307,23 +28409,6 @@ x:	.word 2
 	la.tls.gd a0,x
         call __tls_get_addr'
 	;;
-  s390-*-*)
-    conftest_s='
-	.section ".tdata","awT",@progbits
-foo:	.long	25
-	.text
-	.long	foo@TLSGD
-	.long	foo@TLSLDM
-	.long	foo@DTPOFF
-	.long	foo@NTPOFF
-	.long	foo@GOTNTPOFF
-	.long	foo@INDNTPOFF
-	l	%r1,foo@GOTNTPOFF(%r12)
-	l	%r1,0(%r1):tls_load:foo
-	bas	%r14,0(%r1,%r13):tls_gdcall:foo
-	bas	%r14,0(%r1,%r13):tls_ldcall:foo'
-	tls_as_opt="-m31"
-	;;
   s390x-*-*)
     conftest_s='
 	.section ".tdata","awT",@progbits
@@ -29129,6 +29214,38 @@ $as_echo "$gcc_cv_as_avr_mgccisr" >&6; }
 if test $gcc_cv_as_avr_mgccisr = yes; then
 
 $as_echo "#define HAVE_AS_AVR_MGCCISR_OPTION 1" >>confdefs.h
+
+fi
+
+
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking assembler for .gnu_attribute" >&5
+$as_echo_n "checking assembler for .gnu_attribute... " >&6; }
+if ${gcc_cv_as_avr_gnu_attribute+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  gcc_cv_as_avr_gnu_attribute=no
+  if test x"$gcc_cv_as" != x; then
+    $as_echo '.gnu_attribute 4,1' > conftest.s
+    if { ac_try='$gcc_cv_as $gcc_cv_as_flags  -o conftest.o conftest.s >&5'
+  { { eval echo "\"\$as_me\":${as_lineno-$LINENO}: \"$ac_try\""; } >&5
+  (eval $ac_try) 2>&5
+  ac_status=$?
+  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
+  test $ac_status = 0; }; }
+    then
+	gcc_cv_as_avr_gnu_attribute=yes
+    else
+      echo "configure: failed program was" >&5
+      cat conftest.s >&5
+    fi
+    rm -f conftest.o conftest.s
+  fi
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $gcc_cv_as_avr_gnu_attribute" >&5
+$as_echo "$gcc_cv_as_avr_gnu_attribute" >&6; }
+if test $gcc_cv_as_avr_gnu_attribute = yes; then
+
+$as_echo "#define HAVE_AS_AVR_GNU_ATTRIBUTE 1" >>confdefs.h
 
 fi
 
@@ -31568,7 +31685,7 @@ $as_echo "#define HAVE_AS_16B_ATOMIC 1" >>confdefs.h
 fi
 
     ;;
-    s390*-*-*)
+    s390x-*-*)
     { $as_echo "$as_me:${as_lineno-$LINENO}: checking assembler for .gnu_attribute support" >&5
 $as_echo_n "checking assembler for .gnu_attribute support... " >&6; }
 if ${gcc_cv_as_s390_gnu_attribute+:} false; then :
@@ -32301,7 +32418,7 @@ foo:
 	.file 1 \"foo.c\"
 	$insn
 	.file 2 \"foo.h\"
-	ret
+	$insn
 "
    dwarf4_success=no
    { $as_echo "$as_me:${as_lineno-$LINENO}: checking assembler for --gdwarf-4 with the APP marker" >&5
@@ -33701,7 +33818,7 @@ fi
 case "$target" in
   powerpc*-*-linux* | \
   sparc*-*-linux* | \
-  s390*-*-linux* | \
+  s390x-*-linux* | \
   alpha*-*-linux*)
 
 # Check whether --with-long-double-128 was given.
@@ -33710,7 +33827,7 @@ if test "${with_long_double_128+set}" = set; then :
 else
 
       case "$target" in
-	s390*-*-linux-musl*)
+	s390x-*-linux-musl*)
 	  gcc_cv_target_ldbl128=yes
 	  ;;
 	powerpc*-*-linux-musl*)
@@ -35076,7 +35193,7 @@ fi
 
 
 case $target in
-  s390*-linux*)
+  s390x-linux*)
   if test x"$enable_s390_excess_float_precision" = xauto; then
     # Can we autodetect the behavior of the target libc?
     if test "$target" = "$host" -a "$host" = "$build"; then
@@ -35240,7 +35357,7 @@ $as_echo_n "checking AArch64 build supports SPE profiling for autoprofiledbootst
 	if test ! -n "$($PERF record -j any,u -o /dev/null /bin/true 2>&1 | grep "PMU Hardware or event type doesn't support branch stack sampling.")"; then
 	  AFDO_PROFILER=perf
 	  aarch64_spe_support="using BRBE instead"
-	elif test -n "$($PERF list | grep arm_spe)"; then
+	elif test -n "$($PERF list pmu | grep arm_spe)"; then
 	  AFDO_PROFILER=perf_spe
 	  aarch64_spe_support=yes
 	fi

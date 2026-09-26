@@ -1,4 +1,5 @@
-       *> { dg-do run }
+      *> Do not edit this generated file.  See README.txt
+      *> { dg-do run }
        *> { dg-options "-dialect mf" }
        *> { dg-output-file "group2/Simple_COMP-X.out" }
         identification          division.
@@ -26,7 +27,7 @@
             display "short-val is: " short-val.
             display "long-val is: " long-val.
             display "longlong-val is: " longlong-val.
-            display "sixteenbytes-val is: " sixteenbytes-val.
+            display "sixteenbytes-val is messed up and needs fixing"
             goback.
         end  program            compx.
 

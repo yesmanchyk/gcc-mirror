@@ -1,3 +1,4 @@
+
 ; lang.opt -- Options for the gcc Cobol front end.
 
 ; Copyright (C) 2021-2026 Free Software Foundation, Inc.
@@ -103,6 +104,16 @@ Wlevel-78-defined
 Cobol Warning Var(level_78_defined, 1) Init(1)
 Warn if CDF defines Level 78 constant.
 
+; IbmAssignFile
+Wassign-file
+Cobol Warning Var(assign_file, 1) Init(1)
+Warn if filename is used with ASSIGN.
+
+; MfAssignExternal
+Wassign-external
+Cobol Warning Var(assign_external, 1) Init(1)
+Warn if EXTERNAL is used with ASSIGN.
+
 ; MfBinaryLongLong
 Wbinary-long-long
 Cobol Warning Var(binary_long_long, 1) Init(1)
@@ -132,6 +143,16 @@ Warn if COMPUTATIONAL-6 is used.
 Wcomp-x
 Cobol Warning Var(comp_x, 1) Init(1)
 Warn if COMPUTATIONAL is used with PICTURE X.
+
+; MfHexNumeric
+Whex-numeric
+Cobol Warning Var(hex_numeric, 1) Init(1)
+Warn if hexadecimal notation is used for integers.
+
+; MfDisplayScreen
+Wdisplay-screen
+Cobol Warning Var(display_screen, 1) Init(1)
+Warn if DISPLAY WITH screen options is used.
 
 ; MfTrailing
 Winspect-trailing
@@ -163,10 +184,25 @@ Wmove-pointer
 Cobol Warning Var(move_pointer, 1) Init(1)
 Warn if MOVE POINTER is used.
 
+; MfRedefinesFirst
+Wredefines-first
+Cobol Warning Var(redefines_first, 1) Init(1)
+Warn if REDEFINES does not appear immediately after NAME.
+
+; MfRedefinesTable
+Wredefines-table
+Cobol Warning Var(redefines_table, 1) Init(1)
+Warn if REDEFINES source is a table.
+
 ; MfReturningNum
 Wreturning-number
 Cobol Warning Var(returning_number, 1) Init(1)
 Warn if RETURNING <number> is used.
+
+; MfSetNumeric, 
+Wset-numeric
+Cobol Warning Var(set_numeric, 1) Init(1)
+Warn if SET is used with NUMERIC target.
 
 ; MfUsageTypename
 Wusage-typename
@@ -190,7 +226,7 @@ Warn if referenced CDF name is not defined.
 
 ; LexInputN
 Wcopybook-found
-Cobol Warning Var(copybook_found, 1) Init(1)
+Cobol Warning Var(copybook_found, 1) Init(0)
 Print message when copybook is processed.
 
 ; EcUnknownW
@@ -207,6 +243,11 @@ Print message when ENTRY CONVENTION is specified.
 Winclude-file-found
 Cobol Warning Var(include_file_found, 1) Init(1)
 Print message when include file is processed.
+
+; ParDynamicCall
+Wdynamic-call
+Cobol Warning Var(cobol_dynamic_call, 1) Init(0)
+Note if CALL target is not a literal constant.
 
 ; ParLiteral2W
 Wliteral-concat
@@ -228,10 +269,20 @@ Wnllanginfo-error
 Cobol Warning Var(nllanginfo_error, 1) Init(1)
 Warn if nlanglanginfo(3) fails.
 
+; IbmCallFd
+Wcall-fd
+Cobol Warning Var(cobol_call_fd, 1) Init(1)
+Warn if fd name is used as a CALL parameter.
+
 ; IbmCdf
 Wibm-cdf
 Cobol Warning Var(cobol_ibmcdf, 1) Init(1)
 Warn if IBM-specific CDF directives are used.
+
+; IbmContentExpr
+Wcontent-expr
+Cobol Warning Var(content_expr, 1) Init(1)
+Warn if BY CONTENT parameter is expression without prototype.
 
 ; IbmLengthOf
 Wlength-of
@@ -247,6 +298,11 @@ Warn if PROCEDURE POINTER is used.
 Wsegment
 Cobol Warning Var(cobol_segment, 1) Init(1)
 Warn if SECTION segments are used.
+
+; IsoRedefinesGrow, "-Wredefines-grow"
+Wredefines-grow
+Cobol Warning Var(redefines_grow, 1) Init(1)
+Warn if REDEFINES data item is larger than the redefined.
 
 ; IsoResume
 Wcobol-resume
@@ -380,7 +436,7 @@ Cobol RejectNegative Joined Separate UInteger Var(indicator_column) Init(0) Inte
 -findicator-column=<n>	Column after which Region A begins.
 
 fstatic-call
-Cobol Var(cobol_static_call, 1) Init(1)
+Cobol Var(cobol_static_call) Init(1)
 Enable/disable static linkage for CALL literals.
 
 ftrace-debug

@@ -146,6 +146,8 @@
 
 #include <avx10_2convertintrin.h>
 
+#include <avx10v2auxintrin.h>
+
 #include <avx10_2bf16intrin.h>
 
 #include <avx10_2satcvtintrin.h>
@@ -161,4 +163,7 @@
 #include <avx512bmmintrin.h>
 
 #include <avx512bmmvlintrin.h>
+
+#include <acev1intrin.h>
+
 #endif /* _IMMINTRIN_H_INCLUDED */

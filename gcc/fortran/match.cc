@@ -5249,7 +5249,7 @@ gfc_match_allocate (void)
 
       if (gfc_match (" :: ") == MATCH_YES)
 	{
-	  if (!gfc_notify_std (GFC_STD_F2003, "typespec in ALLOCATE at %L",
+	  if (!gfc_notify_std (GFC_STD_F2003, "type-spec in ALLOCATE at %L",
 			       &old_locus))
 	    goto cleanup;
 
@@ -5280,6 +5280,16 @@ gfc_match_allocate (void)
 	{
 	  ts.type = BT_UNKNOWN;
 	  gfc_current_locus = old_locus;
+	}
+
+      /* F2018:C937 (R927) type-spec shall not specify a type that has a
+	 coarray ultimate component.  Similar text in F2008:C640 (R626).  */
+      if (ts.type == BT_DERIVED
+	  && ts.u.derived->attr.coarray_comp)
+	{
+	  gfc_error ("Type-spec at %L has a coarray ultimate component",
+		     &old_locus);
+	  goto cleanup;
 	}
     }
 
@@ -5405,7 +5415,7 @@ gfc_match_allocate (void)
 	  if (!gfc_type_compatible (&tail->expr->ts, &ts))
 	    {
 	      gfc_error ("Type of entity at %L is type incompatible with "
-			 "typespec", &tail->expr->where);
+			 "type-spec", &tail->expr->where);
 	      goto cleanup;
 	    }
 
@@ -5413,7 +5423,7 @@ gfc_match_allocate (void)
 	  if (ts.kind != tail->expr->ts.kind && !UNLIMITED_POLY (tail->expr))
 	    {
 	      gfc_error ("Kind type parameter for entity at %L differs from "
-			 "the kind type parameter of the typespec",
+			 "the kind type parameter of the type-spec",
 			 &tail->expr->where);
 	      goto cleanup;
 	    }
@@ -5431,6 +5441,23 @@ gfc_match_allocate (void)
 	{
 	  gfc_error ("Shape specification for allocatable scalar at %C");
 	  goto cleanup;
+	}
+
+      /* F2018(11.1.5.2): Track coarrays allocated in team blocks.  */
+      gfc_namespace *team_ns = get_current_team_context ();
+      bool codim = tail->expr->symtree->n.sym->attr.codimension
+		   || (tail->expr->symtree->n.sym->as
+		       && tail->expr->symtree->n.sym->as->corank);
+      for (gfc_ref *r = tail->expr->ref; r; r = r->next)
+	if (r->type == REF_COMPONENT && r->u.c.component)
+	  codim = r->u.c.component->attr.codimension
+		  || (r->u.c.component->as && r->u.c.component->as->corank);
+
+      if (flag_coarray == GFC_FCOARRAY_LIB && team_ns && codim)
+	{
+	  gfc_expr *e = gfc_copy_expr (tail->expr);
+	  vec<gfc_expr *> &allocated = team_allocated_coarrays.get_or_insert (team_ns);
+	  allocated.safe_push (e);
 	}
 
       if (gfc_match_char (',') != MATCH_YES)
@@ -5508,7 +5535,7 @@ alloc_opt_list:
 	  /* The next 2 conditionals check C631.  */
 	  if (ts.type != BT_UNKNOWN)
 	    {
-	      gfc_error ("SOURCE tag at %L conflicts with the typespec at %L",
+	      gfc_error ("SOURCE tag at %L conflicts with the type-spec at %L",
 			 &tmp->where, &old_locus);
 	      goto cleanup;
 	    }
@@ -5518,6 +5545,8 @@ alloc_opt_list:
 				  " with more than a single allocate object",
 				  &tmp->where))
 	    goto cleanup;
+
+
 
 	  source = tmp;
 	  tmp = NULL;
@@ -5567,6 +5596,17 @@ alloc_opt_list:
 
   if (gfc_match (" )%t") != MATCH_YES)
     goto syntax;
+
+  /* C949 (R930) The declared type of source-expr shall not have a
+     coarray ultimate component. */
+  if (source
+      && source->ts.type == BT_DERIVED
+      && source->ts.u.derived->attr.coarray_comp)
+    {
+      gfc_error ("Declared type of source expression at %L has a coarray "
+		 "ultimate component", &source->where);
+      goto cleanup;
+    }
 
   /* Check F08:C637.  */
   if (source && mold)

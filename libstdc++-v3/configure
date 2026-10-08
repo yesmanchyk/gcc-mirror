@@ -21462,6 +21462,13 @@ ac_compiler_gnu=$ac_cv_cxx_compiler_gnu
       darwin*)
         ac_has_nanosleep=yes
         ac_has_sched_yield=yes
+        case "${target_os}" in
+          darwin1[6-9]* | darwin2*)
+            # clock_gettime() is available from Darwin12.
+            ac_has_clock_monotonic=yes
+            ac_has_clock_realtime=yes
+            ;;
+        esac
         ;;
       # VxWorks has nanosleep as soon as the kernel is configured with
       # INCLUDE_POSIX_TIMERS, which is normally/most-often the case.
@@ -21808,9 +21815,8 @@ cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 int
 main ()
 {
-#if _POSIX_TIMERS > 0 && defined(_POSIX_MONOTONIC_CLOCK)
+
 	  timespec tp;
-	 #endif
 	  clock_gettime(CLOCK_MONOTONIC, &tp);
 
   ;
@@ -21841,9 +21847,8 @@ cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 int
 main ()
 {
-#if _POSIX_TIMERS > 0
+
 	  timespec tp;
-	 #endif
 	  clock_gettime(CLOCK_REALTIME, &tp);
 
   ;
@@ -21874,9 +21879,8 @@ cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 int
 main ()
 {
-#if _POSIX_TIMERS > 0
+
 	  timespec tp;
-	 #endif
 	  nanosleep(&tp, 0);
 
   ;
@@ -21910,9 +21914,8 @@ $as_echo_n "checking for clock_gettime syscall... " >&6; }
 int
 main ()
 {
-#if _POSIX_TIMERS > 0 && defined(_POSIX_MONOTONIC_CLOCK)
-	    timespec tp;
-	   #endif
+
+	   timespec tp;
 	   syscall(SYS_clock_gettime, CLOCK_MONOTONIC, &tp);
 	   syscall(SYS_clock_gettime, CLOCK_REALTIME, &tp);
 
@@ -23173,8 +23176,8 @@ rm -f core conftest.err conftest.$ac_objext \
       rm -f conftest.c
       touch conftest.c
       if $CC -c conftest.c; then
-	if $LD --gc-sections -o conftest conftest.o 2>&1 | \
-	   grep "Warning: gc-sections option ignored" > /dev/null; then
+	if LC_ALL=C $LD --gc-sections -o conftest conftest.o 2>&1 | \
+	   grep "[Ww]arning: gc-sections option ignored" > /dev/null; then
 	  ac_gcsections=no
 	fi
       fi
@@ -29102,8 +29105,8 @@ rm -f core conftest.err conftest.$ac_objext \
       rm -f conftest.c
       touch conftest.c
       if $CC -c conftest.c; then
-	if $LD --gc-sections -o conftest conftest.o 2>&1 | \
-	   grep "Warning: gc-sections option ignored" > /dev/null; then
+	if LC_ALL=C $LD --gc-sections -o conftest conftest.o 2>&1 | \
+	   grep "[Ww]arning: gc-sections option ignored" > /dev/null; then
 	  ac_gcsections=no
 	fi
       fi
@@ -32236,8 +32239,8 @@ rm -f core conftest.err conftest.$ac_objext \
       rm -f conftest.c
       touch conftest.c
       if $CC -c conftest.c; then
-	if $LD --gc-sections -o conftest conftest.o 2>&1 | \
-	   grep "Warning: gc-sections option ignored" > /dev/null; then
+	if LC_ALL=C $LD --gc-sections -o conftest conftest.o 2>&1 | \
+	   grep "[Ww]arning: gc-sections option ignored" > /dev/null; then
 	  ac_gcsections=no
 	fi
       fi
@@ -38361,8 +38364,8 @@ rm -f core conftest.err conftest.$ac_objext \
       rm -f conftest.c
       touch conftest.c
       if $CC -c conftest.c; then
-	if $LD --gc-sections -o conftest conftest.o 2>&1 | \
-	   grep "Warning: gc-sections option ignored" > /dev/null; then
+	if LC_ALL=C $LD --gc-sections -o conftest conftest.o 2>&1 | \
+	   grep "[Ww]arning: gc-sections option ignored" > /dev/null; then
 	  ac_gcsections=no
 	fi
       fi
@@ -38652,8 +38655,8 @@ rm -f core conftest.err conftest.$ac_objext \
       rm -f conftest.c
       touch conftest.c
       if $CC -c conftest.c; then
-	if $LD --gc-sections -o conftest conftest.o 2>&1 | \
-	   grep "Warning: gc-sections option ignored" > /dev/null; then
+	if LC_ALL=C $LD --gc-sections -o conftest conftest.o 2>&1 | \
+	   grep "[Ww]arning: gc-sections option ignored" > /dev/null; then
 	  ac_gcsections=no
 	fi
       fi
@@ -39119,8 +39122,8 @@ rm -f core conftest.err conftest.$ac_objext \
       rm -f conftest.c
       touch conftest.c
       if $CC -c conftest.c; then
-	if $LD --gc-sections -o conftest conftest.o 2>&1 | \
-	   grep "Warning: gc-sections option ignored" > /dev/null; then
+	if LC_ALL=C $LD --gc-sections -o conftest conftest.o 2>&1 | \
+	   grep "[Ww]arning: gc-sections option ignored" > /dev/null; then
 	  ac_gcsections=no
 	fi
       fi
@@ -42516,8 +42519,8 @@ rm -f core conftest.err conftest.$ac_objext \
       rm -f conftest.c
       touch conftest.c
       if $CC -c conftest.c; then
-	if $LD --gc-sections -o conftest conftest.o 2>&1 | \
-	   grep "Warning: gc-sections option ignored" > /dev/null; then
+	if LC_ALL=C $LD --gc-sections -o conftest conftest.o 2>&1 | \
+	   grep "[Ww]arning: gc-sections option ignored" > /dev/null; then
 	  ac_gcsections=no
 	fi
       fi
@@ -45866,8 +45869,8 @@ rm -f core conftest.err conftest.$ac_objext \
       rm -f conftest.c
       touch conftest.c
       if $CC -c conftest.c; then
-	if $LD --gc-sections -o conftest conftest.o 2>&1 | \
-	   grep "Warning: gc-sections option ignored" > /dev/null; then
+	if LC_ALL=C $LD --gc-sections -o conftest conftest.o 2>&1 | \
+	   grep "[Ww]arning: gc-sections option ignored" > /dev/null; then
 	  ac_gcsections=no
 	fi
       fi
@@ -46082,8 +46085,8 @@ rm -f core conftest.err conftest.$ac_objext \
       rm -f conftest.c
       touch conftest.c
       if $CC -c conftest.c; then
-	if $LD --gc-sections -o conftest conftest.o 2>&1 | \
-	   grep "Warning: gc-sections option ignored" > /dev/null; then
+	if LC_ALL=C $LD --gc-sections -o conftest conftest.o 2>&1 | \
+	   grep "[Ww]arning: gc-sections option ignored" > /dev/null; then
 	  ac_gcsections=no
 	fi
       fi
@@ -51016,7 +51019,7 @@ $as_echo "$as_me: WARNING: === Symbol versioning will be disabled." >&2;}
 fi
 
 # For libtool versioning info, format is CURRENT:REVISION:AGE
-libtool_VERSION=6:36:0
+libtool_VERSION=6:37:0
 
 # Everything parsed; figure out what files and settings to use.
 case $enable_symvers in
@@ -53737,7 +53740,7 @@ $as_echo "$glibcxx_cv_libbacktrace_atomics" >&6; }
     CXXFLAGS='-O0 -S'
 
     cat > conftest.$ac_ext << EOF
-#line 53740 "configure"
+#line 53743 "configure"
 #include <stddef.h>
 int main()
 {

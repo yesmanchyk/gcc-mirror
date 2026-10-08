@@ -283,7 +283,7 @@ struct GTY(()) dw_val_node {
     {
       struct dw_val_loc_descr_node
 	{
-	  ENUM_BITFIELD (dwarf_location_atom) dw_loc_opc_v : 8;
+	  enum dwarf_location_atom dw_loc_opc_v : 8;
 	  /* Used to distinguish DW_OP_addr with a direct symbol relocation
 	     from DW_OP_addr with a dtp-relative symbol relocation.  */
 	  unsigned int dw_loc_dtprel_v : 1;
@@ -461,6 +461,7 @@ struct array_descr_info
   tree associated;
   tree stride;
   tree rank;
+  bool reverse_storage_order;
   bool stride_in_bits;
   struct array_descr_dimen
     {

@@ -894,6 +894,12 @@ optimizing.
 Maximum number of dominators BBs to walk when simplifying loop bounds
 and conditions.
 
+@paindex dom-jump-threading
+@item dom-jump-threading
+Enable jump threading in the dominator optimizer pass.  Disabling it
+is useful to isolate the jump threads found by the backward threader,
+which runs regardless.
+
 @paindex max-jump-thread-duplication-stmts
 @item max-jump-thread-duplication-stmts
 Maximum number of statements allowed in a block that needs to be
@@ -1703,6 +1709,12 @@ Whether the target fully pipelines FMA instructions.  If non-zero,
 reassociation considers the benefit of parallelizing FMA's multiplication
 part and addition part, assuming FMUL and FMA use the same units that can
 also do FADD.
+
+@paindex widening-mul-defer-fma
+@item widening-mul-defer-fma
+When nonzero, the widening-multiply pass defers forming an FMA whose result
+feeds a loop-header PHI, leaving a separate multiply and add.  Set to zero to
+contract such loop-carried reductions into an FMA instead.
 
 @paindex sms-loop-average-count-threshold
 @item sms-loop-average-count-threshold

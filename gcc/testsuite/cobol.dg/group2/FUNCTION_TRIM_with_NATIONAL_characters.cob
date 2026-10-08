@@ -1,4 +1,5 @@
-       *> { dg-do run }
+      *> Do not edit this generated file.  See README.txt
+      *> { dg-do run }
        *> { dg-output-file "group2/FUNCTION_TRIM_with_NATIONAL_characters.out" }
         identification          division.
         program-id.             prog.
@@ -6,12 +7,12 @@
         configuration           section.
         special-names.
             locale cp1252   is "cp1252"
-            locale utf16le  is "utf16le".
+            locale utf16  is "utf16".
          Object-Computer.
              linux
              Character Classification
                  for Alphanumeric is cp1252
-                 for National     is utf16le.
+                 for National     is utf16.
         data                    division.
         working-storage         section.
         01 from-8   pic x(10) value  "   8888   ".

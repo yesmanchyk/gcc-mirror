@@ -17,10 +17,12 @@
 // <http://www.gnu.org/licenses/>.
 
 #include "rust-compile-drop.h"
+#include "rust-compile-drop-builder.h"
 #include "rust-compile-base.h"
 #include "rust-compile-context.h"
 #include "rust-compile-implitem.h"
-#include "rust-hir-path-probe.h"
+#include "rust-bir-drop-analysis.h"
+#include "rust-hir-path-probe-impl-trait.h"
 #include "rust-hir-trait-reference.h"
 #include "rust-hir-type-bounds.h"
 #include "rust-lang-item.h"
@@ -29,8 +31,10 @@
 namespace Rust {
 namespace Compile {
 
+CompileDrop::CompileDrop (Context *ctx) : ctx (ctx) {}
+
 bool
-CompileDrop::type_has_drop_impl (Context *ctx, TyTy::BaseType *ty)
+CompileDrop::type_has_drop_impl (TyTy::BaseType *ty)
 {
   auto drop_lang_item
     = ctx->get_mappings ().lookup_lang_item (LangItem::Kind::DROP);
@@ -53,8 +57,8 @@ CompileDrop::type_has_drop_impl (Context *ctx, TyTy::BaseType *ty)
 
 // Find the Drop trait, look for the drop method, and build the function call.
 tree
-CompileDrop::compile_drop_call (Context *ctx, Bvariable *var,
-				TyTy::BaseType *ty, location_t locus)
+CompileDrop::compile_drop_call (Bvariable *var, TyTy::BaseType *ty,
+				location_t locus)
 {
   auto drop_lang = ctx->get_mappings ().lookup_lang_item (LangItem::Kind::DROP);
   if (!drop_lang.has_value ())
@@ -87,13 +91,19 @@ CompileDrop::compile_drop_call (Context *ctx, Bvariable *var,
   return Backend::call_expression (fn_addr, {var_addr}, nullptr, locus);
 }
 
-void
-CompileDrop::emit_current_scope_drop_calls (Context *ctx)
+tree
+CompileDrop::build_current_scope_drop_cleanup ()
 {
-  auto &drop_candidates = ctx->peek_block_drop_candidates ();
+  std::vector<tree> drop_stmts;
+
+  DropBuilder drop_builder (*ctx);
+  auto &drop_candidates = drop_builder.peek_block_drop_candidates ();
 
   for (auto it = drop_candidates.rbegin (); it != drop_candidates.rend (); ++it)
     {
+      if (BIR::DropAnalysis::get ().is_definitely_dead (it->hirid))
+	continue;
+
       TyTy::BaseType *ty = nullptr;
       Bvariable *var = nullptr;
 
@@ -103,10 +113,29 @@ CompileDrop::emit_current_scope_drop_calls (Context *ctx)
       ok = ctx->lookup_var_decl (it->hirid, &var);
       rust_assert (ok);
 
-      tree drop_call = CompileDrop::compile_drop_call (ctx, var, ty, it->locus);
+      tree drop_call = compile_drop_call (var, ty, it->locus);
       if (drop_call != NULL_TREE)
-	ctx->add_statement (convert_to_void (drop_call, ICV_STATEMENT));
+	{
+	  tree drop_stmt = convert_to_void (drop_call, ICV_STATEMENT);
+	  Bvariable *flag = nullptr;
+	  if (ctx->lookup_drop_flag (it->hirid, &flag))
+	    {
+	      tree condition = Backend::var_expression (flag, it->locus);
+	      tree clear = drop_builder.drop_flag_assignment (it->hirid, false,
+							      it->locus);
+	      tree guarded_drop = Backend::statement_list ({clear, drop_stmt});
+	      drop_stmt
+		= Backend::if_statement (ctx->peek_fn ().fndecl, condition,
+					 guarded_drop, NULL_TREE, it->locus);
+	    }
+	  drop_stmts.push_back (drop_stmt);
+	}
     }
+
+  if (drop_stmts.empty ())
+    return NULL_TREE;
+
+  return Backend::statement_list (drop_stmts);
 }
 
 } // namespace Compile

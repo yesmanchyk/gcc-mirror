@@ -78,13 +78,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       }
 
     template<typename _InputIterator, typename _OutputIterator,
-	     typename _Tp>
+	     typename _RealType>
       _OutputIterator
       __normalize(_InputIterator __first, _InputIterator __last,
-		  _OutputIterator __result, const _Tp& __factor)
+		  _OutputIterator __result, const _RealType& __factor)
       {
 	for (; __first != __last; ++__first, (void) ++__result)
-	  *__result = *__first / __factor;
+	  *__result = _RealType(_RealType(*__first) / __factor);
 	return __result;
       }
 
@@ -242,7 +242,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     constexpr size_t
     mersenne_twister_engine<_UIntType, __w, __n, __m, __r, __a, __u, __d,
 			    __s, __b, __t, __c, __l, __f>::tempering_u;
-   
+
   template<typename _UIntType,
 	   size_t __w, size_t __n, size_t __m, size_t __r,
 	   _UIntType __a, size_t __u, _UIntType __d, size_t __s,
@@ -2947,28 +2947,30 @@ namespace __detail
     piecewise_constant_distribution<_RealType>::param_type::
     _M_configure()
     {
-      const double __sum = std::accumulate(_M_den.begin(),
-					   _M_den.end(), 0.0);
+      const _CalcType __sum = std::accumulate(_M_den.begin(), _M_den.end(),
+					      _CalcType(0));
       __glibcxx_assert(__sum > 0);
 
       __detail::__normalize(_M_den.begin(), _M_den.end(), _M_den.begin(),
 			    __sum);
 
+      _CalcType __psum(0);
       _M_cp.reserve(_M_den.size());
-      std::partial_sum(_M_den.begin(), _M_den.end(),
-		       std::back_inserter(_M_cp));
+      for (_CalcType __den : _M_den)
+	_M_cp.push_back(__psum += __den);
 
       // Make sure the last cumulative probability is one.
-      _M_cp[_M_cp.size() - 1] = 1.0;
+      _M_cp[_M_cp.size() - 1] = _CalcType(1);
 
       for (size_t __k = 0; __k < _M_den.size(); ++__k)
-	_M_den[__k] /= _M_int[__k + 1] - _M_int[__k];
+	_M_den[__k] = _CalcType(_CalcType(_M_den[__k])
+			/ (_M_int[__k + 1] - _M_int[__k]));
     }
 
   template<typename _RealType>
     void
     piecewise_constant_distribution<_RealType>::param_type::
-    _M_initialize2(const _RealType* __ints, _RealType __den)
+    _M_initialize2(const _RealType* __ints, _CalcType __den)
     {
       if (__ints[0] == _RealType(0) && __ints[1] == _RealType(1))
 	return;
@@ -3041,9 +3043,11 @@ namespace __detail
 	for (; __bbegin != __bend; ++__bbegin)
 	  _M_int.push_back(*__bbegin);
 
+	// _GLIBCXX_RESOLVE_LIB_DEFECTS
+	// 4052. Bogus requirements for piecewise_linear_distribution
 	_M_den.reserve(_M_int.size() - 1);
 	for (size_t __k = 0; __k < _M_int.size() - 1; (void)++__k, ++__wbegin)
-	  _M_den.push_back(*__wbegin);
+	  _M_den.push_back(_CalcType(*__wbegin));
 
 	_M_configure();
       }
@@ -3057,10 +3061,21 @@ namespace __detail
 	if (__bl.size() < 2)
 	  return;
 
+	// _GLIBCXX_RESOLVE_LIB_DEFECTS
+	// 4052. Bogus requirements for piecewise_linear_distribution
+	auto __cfw = [&__fw](_RealType __n, _RealType __p)
+	{
+#if _GLIBCXX_USE_NEW_PIECEWISE_DISTRIBUTIONS
+	  return _RealType(__fw(_RealType(0.5) * (__n + __p)));
+#else
+	  return __fw(0.5 * (__n + __p));
+#endif
+	};
+
 	if (__bl.size() == 2)
 	  {
 	    const _RealType *__ints = __bl.begin();
-	    _RealType __den = __fw(0.5 * (__ints[1] + __ints[0]));
+	    _CalcType __den = __cfw(__ints[1], __ints[0]);
 	    _M_initialize2(__ints, __den);
 	    return;
 	  }
@@ -3068,7 +3083,7 @@ namespace __detail
 	_M_int = __bl;
 	_M_den.reserve(_M_int.size() - 1);
 	for (size_t __k = 0; __k < _M_int.size() - 1; ++__k)
-	  _M_den.push_back(__fw(0.5 * (_M_int[__k + 1] + _M_int[__k])));
+	  _M_den.push_back(__cfw(_M_int[__k + 1], _M_int[__k]));
 
 	_M_configure();
       }
@@ -3081,10 +3096,19 @@ namespace __detail
       {
 	const size_t __n = __nw == 0 ? 1 : __nw;
 	const _RealType __delta = (__xmax - __xmin) / __n;
+	auto __cfw = [&__fw, __delta](_RealType __v)
+	{
+#if _GLIBCXX_USE_NEW_PIECEWISE_DISTRIBUTIONS
+	  return _RealType(__fw(__v + _RealType(0.5) * __delta));
+#else
+	  return __fw(__v + 0.5 * __delta);
+#endif
+	};
+
 	if (__n == 1)
 	  {
 	    _RealType __ints[2] = { __xmin, __xmin + __delta };
-	    _RealType __den = __fw(__xmin + 0.5 * __delta);
+	    _CalcType __den = __cfw(__xmin);
 	    _M_initialize2(__ints, __den);
 	    return;
 	  }
@@ -3095,9 +3119,24 @@ namespace __detail
 
 	_M_den.reserve(__n);
 	for (size_t __k = 0; __k < __nw; ++__k)
-	  _M_den.push_back(__fw(_M_int[__k] + 0.5 * __delta));
+	  _M_den.push_back(__cfw(_M_int[__k]));
 
 	_M_configure();
+      }
+
+  template<typename _RealType>
+    template<typename _AdaptedUniformRandomNumberGenerator>
+      typename piecewise_constant_distribution<_RealType>::result_type
+      piecewise_constant_distribution<_RealType>::
+      __generate_one(_AdaptedUniformRandomNumberGenerator& __aurng,
+		     const param_type& __param)
+      {
+	const _CalcType __p = __aurng();
+	auto __pos = std::lower_bound(__param._M_cp.begin(),
+				      __param._M_cp.end(), __p);
+	const size_t __i = __pos - __param._M_cp.begin();
+	const _CalcType __pref = __i > 0 ? __param._M_cp[__i - 1] : _CalcType(0);
+	return __param._M_int[__i] + (__p - __pref) / _CalcType(__param._M_den[__i]);
       }
 
   template<typename _RealType>
@@ -3107,20 +3146,13 @@ namespace __detail
       operator()(_UniformRandomNumberGenerator& __urng,
 		 const param_type& __param)
       {
-	__detail::_Adaptor<_UniformRandomNumberGenerator, double>
+	__detail::_Adaptor<_UniformRandomNumberGenerator, _CalcType>
 	  __aurng(__urng);
 
-	const double __p = __aurng();
 	if (__param._M_cp.empty())
-	  return __p;
+	  return __aurng();
 
-	auto __pos = std::lower_bound(__param._M_cp.begin(),
-				      __param._M_cp.end(), __p);
-	const size_t __i = __pos - __param._M_cp.begin();
-
-	const double __pref = __i > 0 ? __param._M_cp[__i - 1] : 0.0;
-
-	return __param._M_int[__i] + (__p - __pref) / __param._M_den[__i];
+	return __generate_one(__aurng, __param);
       }
 
   template<typename _RealType>
@@ -3133,29 +3165,15 @@ namespace __detail
 		      const param_type& __param)
       {
 	__glibcxx_function_requires(_ForwardIteratorConcept<_ForwardIterator>)
-	__detail::_Adaptor<_UniformRandomNumberGenerator, double>
+	__detail::_Adaptor<_UniformRandomNumberGenerator, _CalcType>
 	  __aurng(__urng);
 
 	if (__param._M_cp.empty())
-	  {
-	    while (__f != __t)
-	      *__f++ = __aurng();
-	    return;
-	  }
-
-	while (__f != __t)
-	  {
-	    const double __p = __aurng();
-
-	    auto __pos = std::lower_bound(__param._M_cp.begin(),
-					  __param._M_cp.end(), __p);
-	    const size_t __i = __pos - __param._M_cp.begin();
-
-	    const double __pref = __i > 0 ? __param._M_cp[__i - 1] : 0.0;
-
-	    *__f++ = (__param._M_int[__i]
-		      + (__p - __pref) / __param._M_den[__i]);
-	  }
+	  while (__f != __t)
+	    *__f++ = __aurng();
+	else
+	  while (__f != __t)
+	    *__f++ = __generate_one(__urng, __param);
       }
 
   template<typename _RealType, typename _CharT, typename _Traits>
@@ -3199,6 +3217,8 @@ namespace __detail
 	       piecewise_constant_distribution<_RealType>& __x)
     {
       using __ios_base = typename basic_istream<_CharT, _Traits>::ios_base;
+      using _StorageType
+	= typename piecewise_constant_distribution<_RealType>::_StorageType;
 
       const typename __ios_base::fmtflags __flags = __is.flags();
       __is.flags(__ios_base::dec | __ios_base::skipws);
@@ -3209,7 +3229,7 @@ namespace __detail
 	  std::vector<_RealType> __int_vec;
 	  if (__detail::__extract_params(__is, __int_vec, __n + 1))
 	    {
-	      std::vector<double> __den_vec;
+	      std::vector<_StorageType> __den_vec;
 	      if (__detail::__extract_params(__is, __den_vec, __n))
 		{
 		  __x.param({ __int_vec.begin(), __int_vec.end(),
@@ -3228,34 +3248,37 @@ namespace __detail
     piecewise_linear_distribution<_RealType>::param_type::
     _M_configure()
     {
-      double __sum = 0.0;
+      _CalcType __sum = 0.0;
       _M_cp.reserve(_M_int.size() - 1);
       _M_m.reserve(_M_int.size() - 1);
       for (size_t __k = 0; __k < _M_int.size() - 1; ++__k)
 	{
 	  const _RealType __delta = _M_int[__k + 1] - _M_int[__k];
-	  __sum += 0.5 * (_M_den[__k + 1] + _M_den[__k]) * __delta;
+	  __sum += _CalcType(0.5)
+		   * (_CalcType(_M_den[__k + 1]) + _CalcType(_M_den[__k]))
+		   * __delta;
 	  _M_cp.push_back(__sum);
-	  _M_m.push_back((_M_den[__k + 1] - _M_den[__k]) / __delta);
+	  _M_m.push_back(
+	    (_CalcType(_M_den[__k + 1]) - _CalcType(_M_den[__k])) / __delta);
 	}
       __glibcxx_assert(__sum > 0);
 
       //  Now normalize the densities...
       __detail::__normalize(_M_den.begin(), _M_den.end(), _M_den.begin(),
 			    __sum);
-      //  ... and partial sums... 
+      //  ... and partial sums...
       __detail::__normalize(_M_cp.begin(), _M_cp.end(), _M_cp.begin(), __sum);
       //  ... and slopes.
       __detail::__normalize(_M_m.begin(), _M_m.end(), _M_m.begin(), __sum);
 
       //  Make sure the last cumulative probablility is one.
-      _M_cp[_M_cp.size() - 1] = 1.0;
+      _M_cp[_M_cp.size() - 1] = _CalcType(1);
     }
 
   template<typename _RealType>
     void
     piecewise_linear_distribution<_RealType>::param_type::
-    _M_initialize2(const _RealType* __ints, const _RealType* __dens)
+    _M_initialize2(const _RealType* __ints, const _CalcType* __dens)
     {
       if (__ints[0] == _RealType(0)
 	  && __ints[1] == _RealType(1)
@@ -3286,7 +3309,7 @@ namespace __detail
 
 	if (__bbegin == __bend)
 	  {
-	    _RealType __dens[2];
+	    _CalcType __dens[2];
 	    __dens[0] = *__wbegin;
 	    ++__wbegin;
 	    __dens[1] = *__wbegin;
@@ -3312,9 +3335,11 @@ namespace __detail
 	for (; __bbegin != __bend; ++__bbegin)
 	  _M_int.push_back(*__bbegin);
 
+	// _GLIBCXX_RESOLVE_LIB_DEFECTS
+	// 4052. Bogus requirements for piecewise_linear_distribution
 	_M_den.reserve(_M_int.size());
 	for (size_t __i = 0; __i < _M_int.size(); (void)++__i, ++__wbegin)
-	  _M_den.push_back(*__wbegin);
+	  _M_den.push_back(_CalcType(*__wbegin));
 
 	_M_configure();
       }
@@ -3331,7 +3356,7 @@ namespace __detail
 	if (__bl.size() == 2)
 	  {
 	    const _RealType *__ints = __bl.begin();
-	    _RealType __den[2];
+	    _CalcType __den[2];
 	    __den[0] = __fw(__ints[0]);
 	    __den[1] = __fw(__ints[1]);
 	    _M_initialize2(__ints, __den);
@@ -3341,7 +3366,7 @@ namespace __detail
 	_M_int = __bl;
 	_M_den.reserve(__bl.size());
 	for (_RealType __b : __bl)
-	  _M_den.push_back(__fw(__b));
+	  _M_den.push_back(_CalcType(__fw(__b)));
 	_M_configure();
       }
 
@@ -3353,12 +3378,23 @@ namespace __detail
       {
 	const size_t __n = __nw == 0 ? 1 : __nw;
 	const _RealType __delta = (__xmax - __xmin) / __n;
+	const auto __cfw = [&] (_RealType __v)
+	{
+#if _GLIBCXX_USE_NEW_PIECEWISE_DISTRIBUTIONS
+	  // _GLIBCXX_RESOLVE_LIB_DEFECTS
+	  // 4052. Bogus requirements for piecewise_linear_distribution
+	  return _RealType(__fw(__v));
+#else
+	  return __fw(__v + __delta);
+#endif
+	};
+
 	if (__n == 1)
 	  {
 	    _RealType __ints[2] = { __xmin, __xmin + __delta };
-	    _RealType __dens[2];
-	    __dens[0] = __fw(__ints[0]);
-	    __dens[1] = __fw(__ints[1]);
+	    _CalcType __dens[2];
+	    __dens[0] = __cfw(__ints[0]);
+	    __dens[1] = __cfw(__ints[1]);
 	    _M_initialize2(__ints, __dens);
 	    return;
 	  }
@@ -3368,11 +3404,41 @@ namespace __detail
 	for (size_t __k = 0; __k <= __nw; ++__k)
 	  {
 	    _M_int.push_back(__xmin + __k * __delta);
-	    _M_den.push_back(__fw(_M_int[__k] + __delta));
+	    _M_den.push_back(__cfw(_M_int[__k]));
 	  }
 
 	_M_configure();
       }
+
+  template<typename _RealType>
+    template<typename _AdaptedUniformRandomNumberGenerator>
+      typename piecewise_linear_distribution<_RealType>::result_type
+      piecewise_linear_distribution<_RealType>::
+      __generate_one(_AdaptedUniformRandomNumberGenerator& __aurng,
+		     const param_type& __param)
+      {
+	const _CalcType __p = __aurng();
+	auto __pos = std::lower_bound(__param._M_cp.begin(),
+				      __param._M_cp.end(), __p);
+	const size_t __i = __pos - __param._M_cp.begin();
+
+	const _CalcType __pref = __i > 0 ? __param._M_cp[__i - 1] : 0.0;
+
+	const _CalcType __a = _CalcType(0.5) * __param._M_m[__i];
+	const _CalcType __b = __param._M_den[__i];
+	const _CalcType __cm = __p - __pref;
+
+	_RealType __x = __param._M_int[__i];
+	if (__a == 0)
+	  __x += __cm / __b;
+	else
+	  {
+	    const _CalcType __d = __b * __b + 4.0 * __a * __cm;
+	    __x += _CalcType(0.5) * (std::sqrt(__d) - __b) / __a;
+	  }
+	return __x;
+      }
+
 
   template<typename _RealType>
     template<typename _UniformRandomNumberGenerator>
@@ -3381,33 +3447,13 @@ namespace __detail
       operator()(_UniformRandomNumberGenerator& __urng,
 		 const param_type& __param)
       {
-	__detail::_Adaptor<_UniformRandomNumberGenerator, double>
+	__detail::_Adaptor<_UniformRandomNumberGenerator, _CalcType>
 	  __aurng(__urng);
 
-	const double __p = __aurng();
 	if (__param._M_cp.empty())
-	  return __p;
+	  return __aurng();
 
-	auto __pos = std::lower_bound(__param._M_cp.begin(),
-				      __param._M_cp.end(), __p);
-	const size_t __i = __pos - __param._M_cp.begin();
-
-	const double __pref = __i > 0 ? __param._M_cp[__i - 1] : 0.0;
-
-	const double __a = 0.5 * __param._M_m[__i];
-	const double __b = __param._M_den[__i];
-	const double __cm = __p - __pref;
-
-	_RealType __x = __param._M_int[__i];
-	if (__a == 0)
-	  __x += __cm / __b;
-	else
-	  {
-	    const double __d = __b * __b + 4.0 * __a * __cm;
-	    __x += 0.5 * (std::sqrt(__d) - __b) / __a;
-          }
-
-        return __x;
+	return __generate_one(__aurng, __param);
       }
 
   template<typename _RealType>
@@ -3420,9 +3466,15 @@ namespace __detail
 		      const param_type& __param)
       {
 	__glibcxx_function_requires(_ForwardIteratorConcept<_ForwardIterator>)
-	// We could duplicate everything from operator()...
-	while (__f != __t)
-	  *__f++ = this->operator()(__urng, __param);
+	__detail::_Adaptor<_UniformRandomNumberGenerator, _CalcType>
+	  __aurng(__urng);
+
+	if (__param._M_cp.empty())
+	  while (__f != __t)
+	    *__f++ = __aurng();
+	else
+	  while (__f != __t)
+	    *__f++ = __generate_one(__urng, __param);
       }
 
   template<typename _RealType, typename _CharT, typename _Traits>
@@ -3466,6 +3518,8 @@ namespace __detail
 	       piecewise_linear_distribution<_RealType>& __x)
     {
       using __ios_base = typename basic_istream<_CharT, _Traits>::ios_base;
+      using _StorageType
+	= typename piecewise_linear_distribution<_RealType>::_StorageType;
 
       const typename __ios_base::fmtflags __flags = __is.flags();
       __is.flags(__ios_base::dec | __ios_base::skipws);
@@ -3476,7 +3530,7 @@ namespace __detail
 	  vector<_RealType> __int_vec;
 	  if (__detail::__extract_params(__is, __int_vec, __n + 1))
 	    {
-	      vector<double> __den_vec;
+	      vector<_StorageType> __den_vec;
 	      if (__detail::__extract_params(__is, __den_vec, __n + 1))
 		{
 		  __x.param({ __int_vec.begin(), __int_vec.end(),
@@ -3652,10 +3706,10 @@ namespace __detail
       // Commented-out assignments below are of values specified in
       //  the Standard, but not used here for reasons noted.
       // r = 2;  // Redundant, we only support radix 2.
-      using _Rng = decltype(_Urbg::max());
-      const _Rng __rng_range_less_1 = _Urbg::max() - _Urbg::min();
+      using _URng = typename make_unsigned<decltype(_Urbg::max())>::type;
+      const _URng __rng_range_less_1(_Urbg::max() - _Urbg::min());
       // R = _UInt(__rng_range_less_1) + 1;  // May wrap to 0.
-      const auto __log2_R = __builtin_popcountg(__rng_range_less_1);
+      const auto __log2_R = std::__popcount(__rng_range_less_1);
       const auto __log2_uint_max = sizeof(_UInt) * __CHAR_BIT__;
       // rd = _UInt(1) << __d;  // Could overflow, UB.
       const unsigned __k = (__d + __log2_R - 1) / __log2_R;
@@ -3750,41 +3804,151 @@ namespace __detail
       // Cannot overflow, as _Urbg::max() - _Urbg::min() is not power of
       // two minus one
       constexpr _UIntR __R = _UIntR(_Urbg::max() - _Urbg::min()) + 1;
-      constexpr unsigned __log2R
-	= sizeof(_UIntR) * __CHAR_BIT__ - __builtin_clzg(__R) - 1;
+      constexpr unsigned __log2R = std::__bit_width(__R) - 1;
       // We overstimate number of required bits, by computing
-      // r such that l * log2(R) >= d, so:
-      // R^l >= (2 ^ log2(R)) ^ l == 2 ^ (log2(r) * l) >= 2^d
-      // And then requiring l * bit_width(R) bits.
-      constexpr unsigned __l = (__d + __log2R - 1) / __log2R;
-      constexpr unsigned __bits = (__log2R + 1) * __l;
-      using _UInt = typename __detail::_Select_uint_least_t<__bits>::type;
-
-      _GLIBCXX_GEN_CANON_CONST _UInt __rd = _UInt(1) << __d;
-      _GLIBCXX_GEN_CANON_CONST auto __logRrd = __gen_canon_log(__rd, __R);
-      _GLIBCXX_GEN_CANON_CONST unsigned __k
-	 = __logRrd.__floor_log + (__rd > __logRrd.__floor_pow);
-
-      _GLIBCXX_GEN_CANON_CONST _UInt __Rk
-	 = (__k > __logRrd.__floor_log)
-	   ? _UInt(__logRrd.__floor_pow) * _UInt(__R)
-	   : _UInt(__logRrd.__floor_pow);
-      _GLIBCXX_GEN_CANON_CONST _UInt __x =  __Rk / __rd;
-
-      while (true)
+      // m such that m * log2(R) >= d, so:
+      // R^m >= (2 ^ log2(R)) ^ m == 2 ^ (log2(R) * m) >= 2^d
+      // And then requiring m * bit_width(R) bits.
+      constexpr unsigned __m = (__d + __log2R - 1) / __log2R;
+      constexpr unsigned __bits = (__log2R + 1) * __m;
+      if constexpr (__log2R >= __d)
 	{
-	  _UInt __Ri{1};
-	  _UInt __sum(__urng() - _Urbg::min());
-	  for (int __i = __k - 1; __i > 0; --__i)
+	  // range already provide required number of bits,
+	  // so in this case __k == 1, and single call to generator
+	  // is sufficient. Furthermore 2^d fits in _UIntR
+	  constexpr _UIntR __rd = _UIntR(1) << __d;
+	  constexpr _UIntR __x = __R >> __d;
+
+	  while (true)
 	    {
-	      __Ri *= _UInt(__R);
-	      __sum += _UInt(__urng() - _Urbg::min()) * __Ri;
+	      _UIntR __val(__urng() - _Urbg::min());
+	      const _RealT __ret = _RealT(__val / __x) / _RealT(__rd);
+	      if (__ret < _RealT(1.0))
+		return __ret;
 	    }
-	  const _RealT __ret = _RealT(__sum / __x) / _RealT(__rd);
-	  if (__ret < _RealT(1.0))
-	    return __ret;
 	}
-#undef _GLIBCXX_GEN_CANON_CONST 
+      // generator call produce fewer bits than __d, but R^k > rd fits
+      // into 128 bits.
+      else if constexpr (__bits <= 128)
+	{
+	  using _UInt = typename __detail::_Select_uint_least_t<__bits>::type;
+
+	  _GLIBCXX_GEN_CANON_CONST _UInt __rd = _UInt(1) << __d;
+	  _GLIBCXX_GEN_CANON_CONST auto __logRrd = __gen_canon_log(__rd, __R);
+	  // __rd is power of two, and __R is not, so __floor_pow is never
+	  // equal to __rd.
+	  _GLIBCXX_GEN_CANON_CONST unsigned __k = __logRrd.__floor_log + 1;
+	  _GLIBCXX_GEN_CANON_CONST _UInt __Rk = __logRrd.__floor_pow * _UInt(__R);
+	  // x = floor(R^k / 2^d) = R^k >> d;
+	  _GLIBCXX_GEN_CANON_CONST _UInt __x =  __Rk >> __d;
+
+	  while (true)
+	    {
+	      _UInt __Ri{1};
+	      _UInt __sum(__urng() - _Urbg::min());
+	      for (int __i = __k - 1; __i > 0; --__i)
+		{
+		  __Ri *= __R;
+		  __sum += __Ri * _UIntR(__urng() - _Urbg::min());
+		}
+	      const _RealT __ret = _RealT(__sum / __x) / _RealT(__rd);
+	      if (__ret < _RealT(1.0))
+		return __ret;
+	    }
+	}
+      else
+	{
+	  static_assert(__log2R < 64, "Only generators emitting up to 64 bits are supported");
+	  using _UInt = typename __detail::_Select_uint_least_t<128>::type;
+	  using _UInt64 = typename __detail::_Select_uint_least_t<64>::type;
+
+	  _GLIBCXX_GEN_CANON_CONST _UInt __rd = _UInt(1) << __d;
+	  _GLIBCXX_GEN_CANON_CONST auto __logRrd = __gen_canon_log(__rd, __R);
+	  // __rd is power of two, and __R is not, so __floor_pow is never
+	  // equal to __rd, and l == k - 1
+	  _GLIBCXX_GEN_CANON_CONST unsigned __l = __logRrd.__floor_log;
+	  _GLIBCXX_GEN_CANON_CONST _UInt __Rl = __logRrd.__floor_pow;
+
+	  // __abits is maximum bit width of the value, that can
+	  // be multiplied by R^l without overflowing 128 bit integer
+	  _GLIBCXX_GEN_CANON_CONST unsigned __bwRl = std::__bit_width(__Rl);
+
+	  // For __R close to power of two, the actual __k may be smaller than __m,
+	  // and will use less than 128bits, default to two 32 bits chunks.
+	  _GLIBCXX_GEN_CANON_CONST unsigned __abits = __bwRl > 96 ? 128 - __bwRl : 32;
+	  _GLIBCXX_GEN_CANON_CONST _UInt64 __amask = (_UInt64(1) << __abits) - 1;
+
+	  // Compute __x = _Rk / __rd (_Rk >> __d), by spliting _R into chunks
+	  // (_pR) of __abits, so their multiplication does not overflow 128 bits.
+	  // __x fits in 64bits, becuse __R^l < __rd < __R^k, thus __x < _R
+	  _UInt64 __x(0), __pR(__R); _UInt __pRk(0);
+	  for (unsigned __shift = __d; __pR; __shift -= __abits)
+	    {
+	      __pRk += __Rl * (__pR & __amask);
+	      __pR >>= __abits;
+
+	      _UInt __xp(__pRk >> __shift);
+	      __x += _UInt64(__xp);
+	      __pRk -= (__xp << __shift);
+	      __pRk >>= __abits;
+	    }
+
+	  while (true)
+	    {
+	      // Compute sum of __urng() * R^i for i in range [0, l).
+	      // The value is smaller than R^l which is smaller than
+	      // __rd so fits into 128 bit integer.
+	      _UInt __Ri{1};
+	      _UInt __lsum(__urng() - _Urbg::min());
+	      for (int __i = __l - 1; __i > 0; --__i)
+		{
+		  __Ri *= _UInt64(__R);
+		  __lsum += __Ri * _UInt64(__urng() - _Urbg::min());
+		}
+
+	      // The last iteration __urng() * R^k may overflow 128bit
+	      // integer. We use the fact that we reject __sum / __x >= __rd,
+	      // and split __urng() value into chunks of __abits, so their
+	      // products with R^l does not overflow 128bit. These products
+	      // are then multiplied by 2^__shift, scaled by __x and added into
+	      // the __sumx, until their value is smaller than remaining value
+	      // __remx [(__rd - __sumx) * 2^__shift], or whole value was
+	      // multiplied (__kth is zero). The remainder of division by
+	      // __x are accumulated into __modx value, and handled later.
+	      // In consequence this guarantees that __sumx never exceeds
+	      // __rd value, and thus does not overflow 128 bit integer.
+	      _UInt __sumx = __lsum / __x, __modx = __lsum % __x;
+	      _UInt __remx = __rd - __sumx;
+	      _UInt64 __kth(__urng() - _Urbg::min());
+	      for (unsigned __shift = 0; __kth; __shift += __abits)
+		{
+		  const _UInt __val = __Rl * (__kth & __amask);
+		  const _UInt __valx = __val / __x;
+		  if (__valx > __remx)
+		    break;
+		  __kth >>= __abits;
+
+		  __sumx += (__valx << __shift);
+		  __modx += ((__val % __x) << __shift);
+
+		  __remx -= __valx;
+		  __remx >>= __abits;
+		}
+	      if (__kth) // (__sum / __x) > _rd after adding __kth iteration
+		continue;
+
+	      // Handle accumulated remainders
+	      const _UInt __valx = __modx / __x;
+	      if (__valx > __rd - __sumx) // avoids overflow
+		continue;
+
+	      __sumx += __valx;
+	      const _RealT __ret = _RealT(__sumx) / _RealT(__rd);
+	      if (__ret < _RealT(1.0))
+		return __ret;
+	    }
+	  }
+#undef _GLIBCXX_GEN_CANON_CONST
     }
 
 #if !defined(_GLIBCXX_GENERATE_CANONICAL_STRICT)

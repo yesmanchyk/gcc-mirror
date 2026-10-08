@@ -181,6 +181,7 @@
    (VTYPE_REGNUM		67)
    (VXRM_REGNUM			68)
    (FRM_REGNUM			69)
+   (VXSAT_REGNUM		70)
 ])
 
 (include "predicates.md")
@@ -676,8 +677,8 @@
 ;; Keep this in sync with enum riscv_microarchitecture.
 (define_attr "tune"
   "generic,sifive_7,sifive_p400,sifive_p600,xiangshan,generic_ooo,mips_p8700,
-   tt_ascalon_d8,andes_25_series,andes_23_series,andes_45_series,spacemit_x60,
-   arcv_rmx100,arcv_rhx100,xt_c908"
+   tt_ascalon_d8,tt_ascalon_xg,andes_25_series,andes_23_series,andes_45_series,
+   spacemit_x60,arcv_rmx100,arcv_rhx100,xt_c908"
   (const (symbol_ref "((enum attr_tune) riscv_microarchitecture)")))
 
 ;; Describe a user's asm statement.
@@ -2478,7 +2479,43 @@
 	(unspec:P
 	    [(match_operand:P 0 "symbolic_operand" "")]
 	    UNSPEC_TLSDESC))
-   (clobber (reg:P T0_REGNUM))]
+   (clobber (reg:P T0_REGNUM))
+   (clobber (reg:RVVM1QI 96))
+   (clobber (reg:RVVM1QI 97))
+   (clobber (reg:RVVM1QI 98))
+   (clobber (reg:RVVM1QI 99))
+   (clobber (reg:RVVM1QI 100))
+   (clobber (reg:RVVM1QI 101))
+   (clobber (reg:RVVM1QI 102))
+   (clobber (reg:RVVM1QI 103))
+   (clobber (reg:RVVM1QI 104))
+   (clobber (reg:RVVM1QI 105))
+   (clobber (reg:RVVM1QI 106))
+   (clobber (reg:RVVM1QI 107))
+   (clobber (reg:RVVM1QI 108))
+   (clobber (reg:RVVM1QI 109))
+   (clobber (reg:RVVM1QI 110))
+   (clobber (reg:RVVM1QI 111))
+   (clobber (reg:RVVM1QI 112))
+   (clobber (reg:RVVM1QI 113))
+   (clobber (reg:RVVM1QI 114))
+   (clobber (reg:RVVM1QI 115))
+   (clobber (reg:RVVM1QI 116))
+   (clobber (reg:RVVM1QI 117))
+   (clobber (reg:RVVM1QI 118))
+   (clobber (reg:RVVM1QI 119))
+   (clobber (reg:RVVM1QI 120))
+   (clobber (reg:RVVM1QI 121))
+   (clobber (reg:RVVM1QI 122))
+   (clobber (reg:RVVM1QI 123))
+   (clobber (reg:RVVM1QI 124))
+   (clobber (reg:RVVM1QI 125))
+   (clobber (reg:RVVM1QI 126))
+   (clobber (reg:RVVM1QI 127))
+   (clobber (reg:SI VL_REGNUM))
+   (clobber (reg:SI VTYPE_REGNUM))
+   (clobber (reg:SI VXRM_REGNUM))
+   (clobber (reg:SI VXSAT_REGNUM))]
   "TARGET_TLSDESC"
   {
     return ".LT%=: auipc\ta0,%%tlsdesc_hi(%0)\;"
@@ -2840,6 +2877,32 @@
   DONE;
 })
 
+;; We don't have a real TImode move but the middle-end demands it if we're
+;; allowing TImode.  Just move the individual registers.
+(define_expand "movti"
+  [(set (match_operand:TI 0 "nonimmediate_operand")
+	(match_operand:TI 1 "general_operand"))]
+  "TARGET_64BIT"
+{
+  /* TODO: Rather than spilling everything we could catch loads or stores
+     of subreg-punned vector registers like
+      (set (mem:TI ...) (subreg:TI (reg:V4SI ...)))
+     and emit a vector load/store right away.  The same is true for the
+     OImode expander.  */
+  riscv_split_doubleword_move (operands[0], operands[1]);
+  DONE;
+})
+
+;; Similar for OImode.
+(define_expand "movoi"
+  [(set (match_operand:OI 0 "nonimmediate_operand")
+	(match_operand:OI 1 "general_operand"))]
+  "TARGET_64BIT"
+{
+  riscv_split_quadword_move (operands[0], operands[1]);
+  DONE;
+})
+
 (define_expand "cmpmemsi"
   [(parallel [(set (match_operand:SI 0)
                (compare:SI (match_operand:BLK 1)
@@ -2878,7 +2941,7 @@
 	      (use (match_operand:SI 3 "const_int_operand"))])]
   ""
 {
-  if (riscv_expand_block_move (operands[0], operands[1], operands[2]))
+  if (riscv_expand_block_move (operands[0], operands[1], operands[2], false))
     DONE;
   else
     FAIL;
@@ -2897,16 +2960,7 @@
 	      (use (match_operand:SI 3 "const_int_operand"))])]
  ""
 {
-  /* If TARGET_VECTOR is false, this routine will return false and we will
-     try scalar expansion.  */
-  if (riscv_vector::expand_vec_setmem (operands[0], operands[1], operands[2]))
-    DONE;
-
-  /* If value to set is not zero, use the library routine.  */
-  if (operands[2] != const0_rtx)
-    FAIL;
-
-  if (riscv_expand_block_clear (operands[0], operands[1]))
+  if (riscv_expand_setmem (operands[0], operands[1], operands[2], false))
     DONE;
   else
     FAIL;
@@ -2917,10 +2971,9 @@
    (match_operand:BLK 1 "general_operand"))
     (use (match_operand:P 2 "const_int_operand"))
     (use (match_operand:SI 3 "const_int_operand"))])]
-  "TARGET_VECTOR"
+  ""
 {
-  if (riscv_vector::expand_block_move (operands[0], operands[1], operands[2],
-				       true))
+  if (riscv_expand_block_move (operands[0], operands[1], operands[2], true))
     DONE;
   else
     FAIL;
@@ -3157,8 +3210,7 @@
 	 (any_extract:GPR
        (match_operand:GPR 1 "register_operand" " r")
        (match_operand     2 "const_int_operand")
-       (match_operand     3 "const_int_operand")))
-   (clobber (match_scratch:GPR  4 "=&r"))]
+       (match_operand     3 "const_int_operand")))]
   "!((TARGET_ZBS || TARGET_XTHEADBS || TARGET_ZICOND
       || TARGET_XVENTANACONDOPS || TARGET_SFB_ALU)
      && (INTVAL (operands[2]) == 1))
@@ -3169,10 +3221,10 @@
         && (INTVAL (operands[2]) + INTVAL (operands[3]) == 32))"
   "#"
   "&& reload_completed"
-  [(set (match_dup 4)
+  [(set (match_dup 0)
      (ashift:GPR (match_dup 1) (match_dup 2)))
    (set (match_dup 0)
-     (<extract_shift>:GPR (match_dup 4) (match_dup 3)))]
+     (<extract_shift>:GPR (match_dup 0) (match_dup 3)))]
 {
   int regbits = GET_MODE_BITSIZE (GET_MODE (operands[0])).to_constant ();
   int sizebits = INTVAL (operands[2]);
@@ -4145,7 +4197,7 @@
 	      (use (match_operand 2 ""))])]
   ""
 {
-  rtx target = riscv_legitimize_call_address (XEXP (operands[0], 0));
+  rtx target = riscv_legitimize_call_address (XEXP (operands[0], 0), true);
   emit_call_insn (gen_sibcall_internal (target, operands[1]));
   DONE;
 })
@@ -4167,7 +4219,7 @@
 	      (use (match_operand 3 ""))])]
   ""
 {
-  rtx target = riscv_legitimize_call_address (XEXP (operands[1], 0));
+  rtx target = riscv_legitimize_call_address (XEXP (operands[1], 0), true);
   emit_call_insn (gen_sibcall_value_internal (operands[0], target,
 					      operands[2]));
   DONE;
@@ -4191,7 +4243,7 @@
   ""
 {
   rtx addr = XEXP (operands[0], 0);
-  rtx target = riscv_legitimize_call_address (addr);
+  rtx target = riscv_legitimize_call_address (addr, false);
   if (riscv_call_needs_lpad_p (addr))
     emit_call_insn (gen_call_internal_cfi (target, operands[1]));
   else
@@ -4249,7 +4301,7 @@
   ""
 {
   rtx addr = XEXP (operands[1], 0);
-  rtx target = riscv_legitimize_call_address (addr);
+  rtx target = riscv_legitimize_call_address (addr, false);
   if (riscv_call_needs_lpad_p (addr))
     emit_call_insn (gen_call_value_internal_cfi (operands[0], target,
 						 operands[2]));
@@ -4435,12 +4487,23 @@
   "mnret"
   [(set_attr "type" "ret")])
 
-(define_insn "stack_tie<mode>"
+(define_insn "@stack_tie<mode>"
   [(set (mem:BLK (scratch))
 	(unspec:BLK [(match_operand:X 0 "register_operand" "r")
 		     (match_operand:X 1 "register_operand" "r")]
 		    UNSPEC_TIE))]
   "!rtx_equal_p (operands[0], operands[1])"
+  ""
+  [(set_attr "type" "ghost")
+   (set_attr "length" "0")]
+)
+
+;; Keep stack loads before an SP adjustment without a second register.
+(define_insn "@stack_tie_sp<mode>"
+  [(set (mem:BLK (scratch))
+	(unspec:BLK [(match_operand:X 0 "register_operand" "r")]
+		    UNSPEC_TIE))]
+  "rtx_equal_p (operands[0], stack_pointer_rtx)"
   ""
   [(set_attr "type" "ghost")
    (set_attr "length" "0")]
@@ -5328,7 +5391,9 @@
 	 (match_operand:DI 5 "const_int_operand")))
    (clobber (match_operand:DI 6 "register_operand"))]
   "(TARGET_64BIT
+    && INTVAL (operands[3]) == 0
     && INTVAL (operands[2]) + INTVAL (operands[4]) == 32
+    && sext_hwi (INTVAL (operands[5]), 32) == INTVAL (operands[5])
     && SMALL_OPERAND (INTVAL (operands[5]) >> INTVAL (operands[4])))"
   [(set (match_dup 6) (and:DI (match_dup 1) (match_dup 5)))
    (set (match_dup 0) (sign_extend:DI (ashift:SI (match_dup 7) (match_dup 4))))]

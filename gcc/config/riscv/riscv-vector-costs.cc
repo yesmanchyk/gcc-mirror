@@ -1239,13 +1239,13 @@ costs::better_main_loop_than_p (const vector_costs *uncast_other) const
     }
   else if (rvv_max_lmul == RVV_DYNAMIC)
     {
-      if (other->m_has_unexpected_spills_p)
+      if (this->m_has_unexpected_spills_p != other->m_has_unexpected_spills_p)
 	{
 	  if (dump_enabled_p ())
 	    dump_printf_loc (MSG_NOTE, vect_location,
 			     "Preferring smaller LMUL loop because"
 			     " it has unexpected spills\n");
-	  return true;
+	  return !this->m_has_unexpected_spills_p;
 	}
       else if (riscv_vla_mode_p (other_loop_vinfo->vector_mode))
 	{
@@ -1261,25 +1261,8 @@ costs::better_main_loop_than_p (const vector_costs *uncast_other) const
 		  return false;
 		}
 	    }
-	  else
-	    {
-	      if (dump_enabled_p ())
-		dump_printf_loc (MSG_NOTE, vect_location,
-				 "Keep current LMUL loop because"
-				 " it is unknown NITERS\n");
-	      return false;
-	    }
 	}
     }
-  /* If NITERS is unknown, we should not use VLS modes to vectorize
-     the loop since we don't support partial vectors for VLS modes,
-     that is, we will have full vectors (VLSmodes) on loop body
-     and partial vectors (VLAmodes) on loop epilogue which is very
-     inefficient.  Instead, we should apply partial vectors (VLAmodes)
-     on loop body without an epilogue on unknown NITERS loop.  */
-  else if (!LOOP_VINFO_NITERS_KNOWN_P (this_loop_vinfo)
-	   && m_cost_type == VLS_VECTOR_COST)
-    return false;
 
   /* Fall back to generic costing if either iteration count is unknown.  For
      known iteration counts, include loop overhead when comparing different
@@ -1569,7 +1552,7 @@ costs::adjust_stmt_cost (enum vect_cost_for_stmt kind, loop_vec_info loop,
   /* Apply LMUL cost scaling uniformly to all vector operations.
      Larger LMUL values have higher latency and register pressure,
      which affects performance regardless of loop structure.  */
-  if (vectype)
+  if (VECTOR_TYPE_P (vectype))
     {
       unsigned lmul_factor = get_lmul_cost_scaling (TYPE_MODE (vectype));
       if (lmul_factor > 1)
@@ -1584,6 +1567,15 @@ costs::add_stmt_cost (int count, vect_cost_for_stmt kind,
 		      stmt_vec_info stmt_info, slp_tree node, tree vectype,
 		      int misalign, vect_cost_model_location where)
 {
+  /* VECTYPE is null when costing scalar IL.  Recover the scalar type to
+     distinguish floating-point statements from integer statements.  */
+  if (m_cost_type == SCALAR_COST && stmt_info)
+    {
+      gcc_assert (!vectype);
+      if (tree lhs = gimple_get_lhs (STMT_VINFO_STMT (stmt_info)))
+	vectype = TREE_TYPE (lhs);
+    }
+
   int stmt_cost
     = targetm.vectorize.builtin_vectorization_cost (kind, vectype, misalign);
 
@@ -1613,11 +1605,42 @@ costs::add_stmt_cost (int count, vect_cost_for_stmt kind,
 	m_unrolled_vls_stmts += count * m_unrolled_vls_niters;
     }
 
-  if (vectype)
+  if (m_cost_type != SCALAR_COST && vectype)
     stmt_cost = adjust_stmt_cost (kind, loop_vinfo, stmt_info, node, vectype,
 				  stmt_cost);
 
+  stmt_cost = scale_vector_cost (kind, loop_vinfo, stmt_info, node,
+				 vectype, where, stmt_cost);
+
   return record_stmt_cost (stmt_info, where, count * stmt_cost);
+}
+
+unsigned
+costs::scale_vector_cost (enum vect_cost_for_stmt kind,
+			  loop_vec_info loop_vinfo,
+			  stmt_vec_info stmt_info, slp_tree node,
+			  tree vectype, vect_cost_model_location where,
+			  unsigned stmt_cost)
+{
+  unsigned int scalar_units = get_scalar_units ();
+  unsigned int vector_units = get_vector_units ();
+
+  /* TODO: we should try to estimate throughput as well
+     as the critical path.  */
+  /* Scale integer vector body costs by the scalar/vector unit ratio.  */
+  if (!costing_for_scalar ()
+      && loop_vinfo
+      && where == vect_body
+      && kind == vector_stmt
+      && !is_reduction (stmt_info, node)
+      && !(stmt_info && STMT_VINFO_GATHER_SCATTER_P (stmt_info))
+      && !(node && mat_gather_scatter_p (SLP_TREE_MEMORY_ACCESS_TYPE (node)))
+      && vectype
+      && VECTOR_INTEGER_TYPE_P (vectype)
+      && scalar_units != 0 && vector_units != 0)
+    stmt_cost = CEIL (stmt_cost * scalar_units, vector_units);
+
+  return stmt_cost;
 }
 
 /* For some target specific vectorization cost which can't be handled per stmt,

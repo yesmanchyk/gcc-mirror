@@ -1,4 +1,5 @@
-       *> { dg-do run }
+      *> Do not edit this generated file.  See README.txt
+      *> { dg-do run }
        *> { dg-output-file "group2/compare_national_to_display.out" }
         identification      division.
         program-id.         prog.
@@ -6,7 +7,7 @@
         configuration section.
         special-names.
             locale greek is "cyrillic"
-            locale unicode is "utf16le".
+            locale unicode is "utf16".
         object-computer.
             xerox-parc-star
             character classification

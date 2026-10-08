@@ -690,6 +690,14 @@ fold_using_range::fold_stmt (vrange &r, gimple *s, fur_source &src, tree name)
   if (gimple_code (s) == GIMPLE_ASSIGN && range_from_readonly_var (r, s))
     return true;
 
+  // Save the current range query and restore it before returning.
+  // If the specified query is different, make it the current one.
+  // PR 125854 - The fold machinery may make a query call.
+  // PR 126814 - tree_expr_nonnegative_p may make a call.
+  // PR 126942 - path_ranger queries should never be the current query.
+  //		 set_range_query will revert to a global query for this.
+  range_query *saved_query = set_range_query (cfun, src.query ());
+
   gimple_range_op_handler handler (s);
   if (gimple_code (s) == GIMPLE_ASSIGN
       && gimple_assign_rhs_code (s) == ADDR_EXPR)
@@ -722,6 +730,9 @@ fold_using_range::fold_stmt (vrange &r, gimple *s, fur_source &src, tree name)
 
   if (!res)
     {
+      // Restore the original query.
+      if (saved_query)
+	set_range_query (cfun, saved_query);
       // If no name specified or range is unsupported, bail.
       if (!name || !gimple_range_ssa_p (name))
 	return false;
@@ -731,7 +742,12 @@ fold_using_range::fold_stmt (vrange &r, gimple *s, fur_source &src, tree name)
     }
 
   if (r.undefined_p ())
-    return true;
+    {
+      // Restore the original query.
+      if (saved_query)
+	set_range_query (cfun, saved_query);
+      return true;
+    }
 
   // We sometimes get compatible types copied from operands, make sure
   // the correct type is being returned.
@@ -741,35 +757,33 @@ fold_using_range::fold_stmt (vrange &r, gimple *s, fur_source &src, tree name)
       range_cast (r, TREE_TYPE (name));
     }
 
-  // IF this is not a prange, we are done.
-  if (!is_a <prange> (r))
-    return true;
-
-  prange &p = as_a <prange> (r);
-  // Check to see if points_to should be set.
-  if (p.pt_unknown_p () && name && gimple_code (s) == GIMPLE_ASSIGN)
+  if (is_a <prange> (r))
     {
-      tree rhs = gimple_assign_rhs1 (s);
-      tree_code code = gimple_assign_rhs_code (s);
-      // If code is SSA_NAME, any points to would already be copied.
-      if (code != SSA_NAME && get_gimple_rhs_class (code) == GIMPLE_SINGLE_RHS
-	  && TREE_CODE (rhs) == ADDR_EXPR)
+      prange &p = as_a <prange> (r);
+      // Check to see if points_to should be set.
+      if (p.pt_unknown_p () && name && gimple_code (s) == GIMPLE_ASSIGN)
 	{
-	  p.set_pt (rhs, true);
-	}
-      // PR 125854 - Do not attempt to invoke the fold machinery unless this
-      // query is the same as the current query (which fold may invoke).
-      else if (src.query () == get_range_query (cfun))
-	{
-	  // If we couldn't find anything, try fold.
-	  x_fold_context = { s, src.query () };
-	  rhs = gimple_fold_stmt_to_constant_1 (s, pta_valueize, pta_valueize);
-	  if (rhs && TREE_CODE (rhs) == ADDR_EXPR)
+	  tree rhs = gimple_assign_rhs1 (s);
+	  tree_code code = gimple_assign_rhs_code (s);
+	  // If code is SSA_NAME, any points to would already be copied.
+	  if (code != SSA_NAME
+	      && get_gimple_rhs_class (code) == GIMPLE_SINGLE_RHS
+	      && TREE_CODE (rhs) == ADDR_EXPR)
+	    p.set_pt (rhs, true);
+	  else
 	    {
-	      p.set_pt (rhs, true);
+	      // If we couldn't find anything, try fold.
+	      x_fold_context = { s, get_range_query (cfun) };
+	      rhs = gimple_fold_stmt_to_constant_1 (s, pta_valueize,
+						    pta_valueize);
+	      if (rhs && TREE_CODE (rhs) == ADDR_EXPR)
+		p.set_pt (rhs, true);
 	    }
 	}
     }
+  // Restore the original query.
+  if (saved_query)
+    set_range_query (cfun, saved_query);
   return true;
 }
 
@@ -979,28 +993,29 @@ fold_using_range::range_of_address (prange &r, gimple *stmt, fur_source &src)
 }
 
 /* If TYPE is a pointer, return false.  Otherwise, add zero of TYPE (which must
-   be an integer) to R and return true.  */
+   be an integer or a float) to R and return true.  */
 
 static bool
 range_from_missing_constructor_part (vrange &r, tree type)
 {
   if (POINTER_TYPE_P (type))
     return false;
-  gcc_checking_assert (irange::supports_p (type));
-  wide_int zero = wi::zero (TYPE_PRECISION (type));
-  r.union_ (int_range<1> (type, zero, zero));
+  gcc_checking_assert (irange::supports_p (type)
+		       || frange::supports_p (type));
+  value_range zero (type);
+  zero.set_zero (type);
+  r.union_ (zero);
   return true;
 }
 
 // One step of fold_using_range::range_from_readonly_var.  Process expressions
 // in COMPS which together load a value of TYPE, from index I to 0 according to
 // the corresponding static initializer in CST which should be either a scalar
-// invariant or a constructor.  Currently TYPE must be either a pointer or an
-// integer.  If TYPE is a pointer, return true if all potentially loaded values
-// are known not to be zero and false if any of them can be zero.  Otherwise
-// return true if it is possible to add all constants which can be loaded from
-// CST (which must be storable to TYPE) to R and do so.
-// TODO: Add support for franges.
+// invariant or a constructor.  Currently TYPE must be a pointer, an integer
+// or a float.  If TYPE is a pointer, return true if all potentially loaded
+// values are known not to be zero and false if any of them can be zero.
+// Otherwise return true if it is possible to add all constants which can be
+// loaded from CST (which must be storable to TYPE) to R and do so.
 
 static bool
 range_from_readonly_load (vrange &r, tree type, tree cst,
@@ -1014,6 +1029,18 @@ range_from_readonly_load (vrange &r, tree type, tree cst,
       if (POINTER_TYPE_P (type))
 	{
 	  return tree_single_nonzero_p (cst);
+	}
+
+      if (TREE_CODE (cst) == REAL_CST)
+	{
+	  const REAL_VALUE_TYPE *rv = TREE_REAL_CST_PTR (cst);
+	  frange elt;
+	  if (real_isnan (rv))
+	    elt.set_nan (type, real_isneg (rv));
+	  else
+	    elt.set (type, *rv, *rv, nan_state (false));
+	  r.union_ (elt);
+	  return true;
 	}
 
       if (TREE_CODE (cst) != INTEGER_CST)
@@ -1104,9 +1131,9 @@ fold_using_range::range_from_readonly_var (vrange &r, gimple *stmt)
 {
   gcc_checking_assert (gimple_code (stmt) == GIMPLE_ASSIGN);
   tree type = TREE_TYPE (gimple_assign_lhs (stmt));
-  /* TODO: Add support for frange.  */
   if (!irange::supports_p (type)
-      && !prange::supports_p (type))
+      && !prange::supports_p (type)
+      && !frange::supports_p (type))
     return false;
 
   unsigned HOST_WIDE_INT limit = param_vrp_cstload_limit;
@@ -1724,9 +1751,12 @@ fur_source::register_outgoing_edges (gcond *s, irange &lhs_range,
   // leading to the condition such as:
   // c_2 = a_4 < b_7
   // if (c_2)
+  // as well as relations implied by a known result, such as:
+  // c_2 = a_4 - b_7
+  // if (c_2 == 0)
   FOR_EACH_GORI_EXPORT_NAME (gori_ssa (), bb, name)
     {
-      if (TREE_CODE (TREE_TYPE (name)) != BOOLEAN_TYPE)
+      if (!INTEGRAL_TYPE_P (TREE_TYPE (name)))
 	continue;
       gimple *stmt = SSA_NAME_DEF_STMT (name);
       gimple_range_op_handler handler (stmt);

@@ -111,136 +111,6 @@ vect_lanes_optab_supported_p (const char *name, convert_optab optab,
   return true;
 }
 
-/* Helper function to identify a simd clone call.  If this is a call to a
-   function with simd clones then return the corresponding cgraph_node,
-   otherwise return NULL.  */
-
-static cgraph_node*
-simd_clone_call_p (gimple *stmt)
-{
-  gcall *call = dyn_cast <gcall *> (stmt);
-  if (!call)
-    return NULL;
-
-  tree fndecl = NULL_TREE;
-  if (gimple_call_internal_p (call, IFN_MASK_CALL))
-    fndecl = TREE_OPERAND (gimple_call_arg (stmt, 0), 0);
-  else
-    fndecl = gimple_call_fndecl (stmt);
-
-  if (fndecl == NULL_TREE)
-    return NULL;
-
-  cgraph_node *node = cgraph_node::get (fndecl);
-  if (node && node->simd_clones != NULL)
-    return node;
-
-  return NULL;
-}
-
-
-
-/* Return the smallest scalar part of STMT_INFO.
-   This is used to determine the vectype of the stmt.  We generally set the
-   vectype according to the type of the result (lhs).  For stmts whose
-   result-type is different than the type of the arguments (e.g., demotion,
-   promotion), vectype will be reset appropriately (later).  Note that we have
-   to visit the smallest datatype in this function, because that determines the
-   VF.  If the smallest datatype in the loop is present only as the rhs of a
-   promotion operation - we'd miss it.
-   Such a case, where a variable of this datatype does not appear in the lhs
-   anywhere in the loop, can only occur if it's an invariant: e.g.:
-   'int_x = (int) short_inv', which we'd expect to have been optimized away by
-   invariant motion.  However, we cannot rely on invariant motion to always
-   take invariants out of the loop, and so in the case of promotion we also
-   have to check the rhs.
-   LHS_SIZE_UNIT and RHS_SIZE_UNIT contain the sizes of the corresponding
-   types.  */
-
-tree
-vect_get_smallest_scalar_type (stmt_vec_info stmt_info, tree scalar_type)
-{
-  HOST_WIDE_INT lhs, rhs;
-
-  /* During the analysis phase, this function is called on arbitrary
-     statements that might not have scalar results.  */
-  if (!tree_fits_uhwi_p (TYPE_SIZE_UNIT (scalar_type)))
-    return scalar_type;
-
-  lhs = rhs = TREE_INT_CST_LOW (TYPE_SIZE_UNIT (scalar_type));
-
-  gassign *assign = dyn_cast <gassign *> (stmt_info->stmt);
-  if (assign)
-    {
-      scalar_type = TREE_TYPE (gimple_assign_lhs (assign));
-      if (gimple_assign_cast_p (assign)
-	  || gimple_assign_rhs_code (assign) == DOT_PROD_EXPR
-	  || gimple_assign_rhs_code (assign) == WIDEN_SUM_EXPR
-	  || gimple_assign_rhs_code (assign) == SAD_EXPR
-	  || gimple_assign_rhs_code (assign) == WIDEN_MULT_EXPR
-	  || gimple_assign_rhs_code (assign) == WIDEN_MULT_PLUS_EXPR
-	  || gimple_assign_rhs_code (assign) == WIDEN_MULT_MINUS_EXPR
-	  || gimple_assign_rhs_code (assign) == WIDEN_LSHIFT_EXPR
-	  || gimple_assign_rhs_code (assign) == FLOAT_EXPR)
-	{
-	  tree rhs_type = TREE_TYPE (gimple_assign_rhs1 (assign));
-
-	  rhs = TREE_INT_CST_LOW (TYPE_SIZE_UNIT (rhs_type));
-	  if (rhs < lhs)
-	    scalar_type = rhs_type;
-	}
-    }
-  else if (cgraph_node *node = simd_clone_call_p (stmt_info->stmt))
-    {
-      auto clone = node->simd_clones->simdclone;
-      for (unsigned int i = 0; i < clone->nargs; ++i)
-	{
-	  if (clone->args[i].arg_type == SIMD_CLONE_ARG_TYPE_VECTOR)
-	    {
-	      tree arg_scalar_type = TREE_TYPE (clone->args[i].vector_type);
-	      rhs = TREE_INT_CST_LOW (TYPE_SIZE_UNIT (arg_scalar_type));
-	      if (rhs < lhs)
-		{
-		  scalar_type = arg_scalar_type;
-		  lhs = rhs;
-		}
-	    }
-	}
-    }
-  else if (gcall *call = dyn_cast <gcall *> (stmt_info->stmt))
-    {
-      unsigned int i = 0;
-      if (gimple_call_internal_p (call))
-	{
-	  internal_fn ifn = gimple_call_internal_fn (call);
-	  if (internal_load_fn_p (ifn))
-	    /* For loads the LHS type does the trick.  */
-	    i = ~0U;
-	  else if (internal_store_fn_p (ifn))
-	    {
-	      /* For stores use the type of the stored value.  */
-	      i = internal_fn_stored_value_index (ifn);
-	      scalar_type = TREE_TYPE (gimple_call_arg (call, i));
-	      i = ~0U;
-	    }
-	  else if (internal_fn_mask_index (ifn) == 0)
-	    i = 1;
-	}
-      if (i < gimple_call_num_args (call))
-	{
-	  tree rhs_type = TREE_TYPE (gimple_call_arg (call, i));
-	  if (tree_fits_uhwi_p (TYPE_SIZE_UNIT (rhs_type)))
-	    {
-	      rhs = TREE_INT_CST_LOW (TYPE_SIZE_UNIT (rhs_type));
-	      if (rhs < lhs)
-		scalar_type = rhs_type;
-	    }
-	}
-    }
-
-  return scalar_type;
-}
-
 
 /* Insert DDR into LOOP_VINFO list of ddrs that may alias and need to be
    tested at run-time.  Return TRUE if DDR was successfully inserted.
@@ -595,6 +465,9 @@ vect_analyze_data_ref_dependence (struct data_dependence_relation *ddr,
 					       "between data-refs %T and %T\n",
 					       DR_REF (dra), DR_REF (drb));
 	    }
+	  if (!vect_preserves_scalar_order_p (dr_info_a, dr_info_b))
+	    return opt_result::failure_at (stmtinfo_a->stmt,
+					   "dependence in interleaving.\n");
 	  /* Record a negative dependence distance to later limit the
 	     amount of stmt copying / unrolling we can perform.
 	     Only need to handle read-after-write dependence.  */
@@ -729,7 +602,7 @@ vect_analyze_early_break_dependences (loop_vec_info loop_vinfo)
 	{
 	  gimple *stmt = gsi_stmt (gsi);
 	  gsi_prev (&gsi);
-	  if (is_gimple_debug (stmt))
+	  if (is_gimple_debug (stmt) || is_a <glabel *> (stmt))
 	    continue;
 
 	  stmt_vec_info orig_stmt_vinfo = loop_vinfo->lookup_stmt (stmt);
@@ -1037,10 +910,10 @@ vect_slp_analyze_store_dependences (vec_info *vinfo, slp_tree node)
   stmt_vec_info last_access_info = vect_find_last_scalar_stmt_in_slp (node);
   gcc_assert (DR_IS_WRITE (STMT_VINFO_DATA_REF (last_access_info)));
 
-  for (unsigned k = 0; k < SLP_TREE_SCALAR_STMTS (node).length (); ++k)
+  for (auto stmt_vinfo : SLP_TREE_SCALAR_STMTS (node))
     {
       stmt_vec_info access_info
-	= vect_orig_stmt (SLP_TREE_SCALAR_STMTS (node)[k]);
+	= vect_orig_stmt (stmt_vinfo);
       if (access_info == last_access_info)
 	continue;
       data_reference *dr_a = STMT_VINFO_DATA_REF (access_info);
@@ -1103,12 +976,12 @@ vect_slp_analyze_load_dependences (vec_info *vinfo, slp_tree node,
   stmt_vec_info first_access_info = vect_find_first_scalar_stmt_in_slp (node);
   gcc_assert (DR_IS_READ (STMT_VINFO_DATA_REF (first_access_info)));
 
-  for (unsigned k = 0; k < SLP_TREE_SCALAR_STMTS (node).length (); ++k)
+  for (auto stmt_vinfo : SLP_TREE_SCALAR_STMTS (node))
     {
-      if (! SLP_TREE_SCALAR_STMTS (node)[k])
+      if (! stmt_vinfo)
 	continue;
       stmt_vec_info access_info
-	= vect_orig_stmt (SLP_TREE_SCALAR_STMTS (node)[k]);
+	= vect_orig_stmt (stmt_vinfo);
       if (access_info == first_access_info)
 	continue;
       data_reference *dr_a = STMT_VINFO_DATA_REF (access_info);
@@ -1245,8 +1118,8 @@ vect_slp_analyze_instance_dependence (vec_info *vinfo, slp_instance instance)
 
       /* Mark stores in this instance and remember the last one.  */
       last_store_info = vect_find_last_scalar_stmt_in_slp (store);
-      for (unsigned k = 0; k < SLP_TREE_SCALAR_STMTS (store).length (); ++k)
-	gimple_set_visited (SLP_TREE_SCALAR_STMTS (store)[k]->stmt, true);
+      for (auto stmt_vinfo : SLP_TREE_SCALAR_STMTS (store))
+	gimple_set_visited (STMT_VINFO_STMT (stmt_vinfo), true);
     }
 
   bool res = true;
@@ -1265,8 +1138,8 @@ vect_slp_analyze_instance_dependence (vec_info *vinfo, slp_instance instance)
 
   /* Unset the visited flag.  */
   if (store)
-    for (unsigned k = 0; k < SLP_TREE_SCALAR_STMTS (store).length (); ++k)
-      gimple_set_visited (SLP_TREE_SCALAR_STMTS (store)[k]->stmt, false);
+    for (auto stmt_vinfo : SLP_TREE_SCALAR_STMTS (store))
+      gimple_set_visited (STMT_VINFO_STMT (stmt_vinfo), false);
 
   /* If this is a SLP instance with a store check if there's a dependent
      load that cannot be forwarded from a previous iteration of a loop
@@ -2455,6 +2328,30 @@ vect_enhance_data_refs_alignment (loop_vec_info loop_vinfo)
 	}
     }
 
+  /* See if we can relax the flags on speculative reads for early break.  Do
+     this outside of the other loops below because they can exit early leading
+     to the flag not being cleared for known in bounds cases.  */
+  poly_uint64 vf = LOOP_VINFO_VECT_FACTOR (loop_vinfo);
+  if (LOOP_VINFO_EARLY_BREAKS (loop_vinfo))
+    for (auto dr : datarefs)
+      {
+	dr_vec_info *dr_info = loop_vinfo->lookup_dr (dr);
+	if (!vect_relevant_for_alignment_p (dr_info))
+	  continue;
+
+	stmt_vec_info stmt_info = dr_info->stmt;
+
+	/* With variable VF, unsafe speculative read can be avoided for known
+	   inbounds DRs as long as partial vectors are used.  */
+	if (!vf.is_constant ()
+	    && dr_safe_speculative_read_required (stmt_info)
+	    && DR_SCALAR_KNOWN_BOUNDS (dr_info))
+	  {
+	    dr_set_safe_speculative_read_required (stmt_info, false);
+	    LOOP_VINFO_MUST_USE_PARTIAL_VECTORS_P (loop_vinfo) = true;
+	  }
+      }
+
   /* While cost model enhancements are expected in the future, the high level
      view of the code at this time is as follows:
 
@@ -2495,7 +2392,6 @@ vect_enhance_data_refs_alignment (loop_vec_info loop_vinfo)
      - The cost of peeling (the extra runtime checks, the increase
        in code size).  */
 
-  poly_uint64 vf = LOOP_VINFO_VECT_FACTOR (loop_vinfo);
   FOR_EACH_VEC_ELT (datarefs, i, dr)
     {
       dr_vec_info *dr_info = loop_vinfo->lookup_dr (dr);
@@ -2504,16 +2400,6 @@ vect_enhance_data_refs_alignment (loop_vec_info loop_vinfo)
 
       stmt_vec_info stmt_info = dr_info->stmt;
       tree vectype = STMT_VINFO_VECTYPE (stmt_info);
-
-      /* With variable VF, unsafe speculative read can be avoided for known
-	 inbounds DRs as long as partial vectors are used.  */
-      if (!vf.is_constant ()
-	  && dr_safe_speculative_read_required (stmt_info)
-	  && DR_SCALAR_KNOWN_BOUNDS (dr_info))
-	{
-	  dr_set_safe_speculative_read_required (stmt_info, false);
-	  LOOP_VINFO_MUST_USE_PARTIAL_VECTORS_P (loop_vinfo) = true;
-	}
 
       do_peeling = vector_alignment_reachable_p (dr_info, vf);
       if (do_peeling)
@@ -4713,7 +4599,6 @@ vect_gather_scatter_fn_p (vec_info *vinfo, bool read_p, bool masked_p,
 
   /* Second pass: No direct match.  This means we try to find a sign-swapped
      offset vectype.  */
-  enum tree_code tmp;
   for (unsigned int i = 0; i < configs.length (); i++)
     {
       unsigned int precision
@@ -4722,7 +4607,7 @@ vect_gather_scatter_fn_p (vec_info *vinfo, bool read_p, bool masked_p,
 	  && precision >= needed_precision
 	  && (supportable_convert_operation (CONVERT_EXPR,
 					     configs[i].offset_vectype,
-					     offset_vectype, &tmp)
+					     offset_vectype)
 	      || (needed_precision == offset_precision
 		  && tree_nop_conversion_p (configs[i].offset_vectype,
 					    offset_vectype))))
@@ -4776,7 +4661,7 @@ vect_gather_scatter_fn_p (vec_info *vinfo, bool read_p, bool masked_p,
 	  && precision >= needed_precision
 	  && (supportable_convert_operation (CONVERT_EXPR,
 					     configs[i].offset_vectype,
-					     offset_vectype, &tmp)
+					     offset_vectype)
 	      || (needed_precision == offset_precision
 		  && tree_nop_conversion_p (configs[i].offset_vectype,
 					    offset_vectype))))
@@ -5472,7 +5357,8 @@ vect_analyze_data_refs (vec_info *vinfo, bool *fatal)
 	  tree init_offset = fold_build2 (PLUS_EXPR, TREE_TYPE (offset),
 					  init, offset);
 	  tree init_addr = fold_build_pointer_plus (base, init_offset);
-	  tree init_ref = build_fold_indirect_ref (init_addr);
+	  tree init_ref = build2 (MEM_REF, TREE_TYPE (DR_REF (dr)),
+				  init_addr, build_zero_cst (ptr_type_node));
 
 	  if (dump_enabled_p ())
 	    dump_printf_loc (MSG_NOTE, vect_location,
@@ -5729,7 +5615,13 @@ vect_create_addr_base_for_vector_ref (vec_info *vinfo, stmt_vec_info stmt_info,
   innermost_loop_behavior *drb = vect_dr_behavior (vinfo, dr_info);
 
   tree data_ref_base = unshare_expr (drb->base_address);
-  tree base_offset = unshare_expr (get_dr_vinfo_offset (vinfo, dr_info, true));
+  tree vector_offset = NULL_TREE;
+  if (loop_vinfo && dr_info->offset)
+    vector_offset = unshare_expr (dr_info->offset);
+  tree base_offset = unshare_expr (vector_offset
+				   ? drb->offset
+				   : get_dr_vinfo_offset (vinfo, dr_info,
+							  true));
   tree init = unshare_expr (drb->init);
 
   if (loop_vinfo)
@@ -5767,7 +5659,27 @@ vect_create_addr_base_for_vector_ref (vec_info *vinfo, stmt_vec_info stmt_info,
 
   vect_ptr_type = build_pointer_type (TREE_TYPE (DR_REF (dr)));
   dest = vect_get_new_vect_var (vect_ptr_type, vect_pointer_var, base_name);
-  addr_base = force_gimple_operand (addr_base, &seq, true, dest);
+
+  /* Keep vectorizer-added offsets separate from the original scalar access
+     address.  Forming "base + scalar offset" first gives the target a better
+     chance of sharing it with other address calculations, such as the
+     misalignment check used for masked alignment peeling.  */
+  if (vector_offset)
+    {
+      tree scalar_dest = vect_get_new_vect_var (vect_ptr_type,
+						vect_pointer_var, base_name);
+      gimple_seq addr_seq = NULL;
+      addr_base = force_gimple_operand (addr_base, &addr_seq, true,
+					scalar_dest);
+      gimple_seq_add_seq (&seq, addr_seq);
+      addr_base = fold_build_pointer_plus (addr_base,
+					   fold_convert (sizetype,
+							 vector_offset));
+    }
+
+  gimple_seq addr_seq = NULL;
+  addr_base = force_gimple_operand (addr_base, &addr_seq, true, dest);
+  gimple_seq_add_seq (&seq, addr_seq);
   gimple_seq_add_seq (new_stmt_list, seq);
 
   if (TREE_CODE (addr_base) == SSA_NAME

@@ -126,6 +126,7 @@ discard_pending_charlen (gfc_charlen *cl)
   if (!cl || !gfc_current_ns || gfc_current_ns->cl_list != cl)
     return;
 
+  gfc_remove_saved_charlen (cl);
   gfc_current_ns->cl_list = cl->next;
   gfc_free_expr (cl->length);
   free (cl);
@@ -146,6 +147,7 @@ discard_pending_charlens (gfc_charlen *saved_cl)
       gfc_charlen *cl = gfc_current_ns->cl_list;
 
       gcc_assert (cl);
+      gfc_remove_saved_charlen (cl);
       gfc_current_ns->cl_list = cl->next;
       gfc_free_expr (cl->length);
       free (cl);
@@ -2515,7 +2517,12 @@ build_struct (const char *name, gfc_charlen *cl, gfc_expr **init,
 
   c->ts = current_ts;
   if (c->ts.type == BT_CHARACTER)
-    c->ts.u.cl = cl;
+    {
+      c->ts.u.cl = cl;
+      /* The component struct is not tracked by the symbol undo mechanism,
+	 so free the charlen here to prevent a double-free.  */
+      gfc_remove_saved_charlen (cl);
+    }
 
   if (c->ts.type != BT_CLASS && c->ts.type != BT_DERIVED
       && (c->ts.kind == 0 || c->ts.type == BT_CHARACTER)
@@ -4496,6 +4503,11 @@ gfc_get_pdt_instance (gfc_actual_arglist *param_list, gfc_symbol **sym,
 	      c2->param_list->next = NULL;
 	    }
 
+	  /* Initializer expressions in PDT templates, such as character_kinds(1),
+	     can end up being mutilated when use associated. Simplify now.  */
+	  if (c1->initializer && c1->initializer->expr_type != EXPR_CONSTANT)
+	    gfc_simplify_expr (c1->initializer, 1);
+
 	  if (!c2->initializer && c1->initializer)
 	    c2->initializer = gfc_copy_expr (c1->initializer);
 
@@ -4579,6 +4591,10 @@ gfc_get_pdt_instance (gfc_actual_arglist *param_list, gfc_symbol **sym,
 	    gfc_free_expr (e);
 	  if (c2->ts.u.cl->length->expr_type != EXPR_CONSTANT)
 	    c2->attr.pdt_string = 1;
+	  if (c1->as && c1->as->type == AS_EXPLICIT)
+	    c2->attr.pdt_array = 1;
+	  else if (c1->attr.allocatable)
+	    c2->ts.deferred = 1;
 	}
 
       /* Recurse into this function for PDT components.  */
@@ -4647,6 +4663,18 @@ gfc_get_pdt_instance (gfc_actual_arglist *param_list, gfc_symbol **sym,
 	      goto error_return;
 	    }
 	  gfc_simplify_expr (c2->initializer, 1);
+	}
+
+      /* Pick up any remaining initializers that could be simplified.  */
+      if (c1->initializer)
+	{
+	  if (!c2->initializer)
+	    c2->initializer = gfc_copy_expr (c1->initializer);
+	  if (gfc_derived_parameter_expr (c2->initializer))
+	    gfc_insert_parameter_exprs (c2->initializer, type_param_spec_list);
+	  c2->initializer->ts = c2->ts;
+	  if (!!gfc_is_constant_expr (c2->initializer))
+	    gfc_simplify_expr (c2->initializer, 1);
 	}
     }
 
@@ -6592,8 +6620,7 @@ bool
 gfc_verify_c_interop (gfc_typespec *ts)
 {
   if (ts->type == BT_DERIVED && ts->u.derived != NULL)
-    return (ts->u.derived->ts.is_c_interop || ts->u.derived->attr.is_bind_c)
-	   ? true : false;
+    return ts->u.derived->ts.is_c_interop || ts->u.derived->attr.is_bind_c;
   else if (ts->type == BT_CLASS)
     return false;
   else if (ts->is_c_interop != 1 && ts->type != BT_ASSUMED)
@@ -7878,6 +7905,13 @@ match_procedure_decl (void)
   m = match_attr_spec();
   if (m == MATCH_ERROR)
     return MATCH_ERROR;
+
+  if (current_attr.allocatable)
+    {
+      current_attr.procedure = 1;
+      gfc_check_conflict (&current_attr, NULL, &gfc_current_locus);
+      return MATCH_ERROR;
+    }
 
   if (proc_if && proc_if->attr.is_bind_c && !current_attr.is_bind_c)
     {

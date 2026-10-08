@@ -54,6 +54,12 @@
 #			support, the default value of
 #			$default_gnu_indirect_function is set to
 #			"no" except for targets which are known to be OK.
+#
+#  default_md_generator_partitions
+#			The default partition counts for genemit, genrecog,
+#			and genattrtab.  Set this to N to use the same count
+#			for all three generators, or to E:R:A to set each
+#			count separately.
 
 # This file sets the following shell variables for use by the
 # autoconf-generated configure script:
@@ -240,6 +246,7 @@ gdb_needs_out_file_path=
 thread_file=
 default_use_cxa_atexit=no
 default_gnu_indirect_function=no
+default_md_generator_partitions=10
 target_gtfiles=
 need_64bit_isa=
 native_system_header_dir=/usr/include
@@ -276,15 +283,6 @@ case ${target} in
     fi;;
 esac
 
-case ${target} in
-  s390-*)
-    if test "x$enable_obsolete" != xyes; then
-      echo "*** Configuration ${target} is deprecated and will be removed." >&2
-      echo "*** Specify --enable-obsolete to build it anyway." >&2
-      exit 1
-    fi;;
-esac
-
 # Unsupported targets list.  Do not put an entry in this list unless
 # it would otherwise be caught by a more permissive pattern.  The list
 # should be in alphabetical order.
@@ -310,6 +308,7 @@ case ${target}${target_min} in
  | pdp11-*-bsd				\
  | powerpc*-*-linux*paired*		\
  | powerpc*-*-*spe*			\
+ | s390-*-*				\
  | sparc-hal-solaris2*			\
  | spu*-*-*				\
  | thumb-*-*				\
@@ -343,6 +342,7 @@ cpu_is_64bit=
 case ${target} in
 aarch64*-*-*)
 	cpu_type=aarch64
+	default_md_generator_partitions=6:6:1
 	extra_headers="${extra_headers} arm_fp16.h"
 	extra_headers="${extra_headers} arm_neon.h"
 	extra_headers="${extra_headers} arm_bf16.h"
@@ -443,6 +443,7 @@ fido-*-*)
         ;;
 i[34567]86-*-* | x86_64-*-*)
 	cpu_type=i386
+	default_md_generator_partitions=6:6:1
 	c_target_objs="i386-c.o"
 	cxx_target_objs="i386-c.o"
 	d_target_objs="i386-d.o"
@@ -487,7 +488,8 @@ i[34567]86-*-* | x86_64-*-*)
 		       avx10_2bf16intrin.h avx10_2satcvtintrin.h
 		       avx10_2minmaxintrin.h avx10_2copyintrin.h
 		       amxavx512intrin.h amxfp8intrin.h movrsintrin.h
-		       amxmovrsintrin.h avx512bmmintrin.h avx512bmmvlintrin.h"
+		       amxmovrsintrin.h avx512bmmintrin.h avx512bmmvlintrin.h
+		       avx10v2auxintrin.h acev1intrin.h"
 	;;
 ia64-*-*)
 	extra_headers=ia64intrin.h
@@ -603,7 +605,7 @@ sparc*-*-*)
 	d_target_objs="sparc-d.o"
 	extra_headers="visintrin.h"
 	;;
-s390*-*-*)
+s390x-*-*)
 	cpu_type=s390
 	d_target_objs="s390-d.o"
 	extra_options="${extra_options} fused-madd.opt"
@@ -1973,8 +1975,13 @@ i[34567]86-*-darwin1[89]* | i[34567]86-*-darwin2*)
 	;;
 i[34567]86-*-darwin*)
 	need_64bit_isa=yes
-	# Baseline choice for a machine that allows m64 support.
+	# Baseline choice for a machine that allows m64 support. This is the
+	# minimum arch that supported Darwin.
 	with_cpu=${with_cpu:-core2}
+	# Ensure that we actually set the capabilities (not just the tune)
+	# Note that 32b is handled specially in darwin.h because there is no
+	# GCC arch that matches.
+	with_arch_64=${with_arch_64:-core2}
 	tmake_file="${tmake_file} ${cpu_type}/t-darwin32-biarch t-slibgcc"
 	tm_file="${cpu_type}/darwin32-biarch.h ${tm_file} "
 	;;
@@ -1983,10 +1990,13 @@ x86_64-*-darwin1[89]* | x86_64-*-darwin2*)
 	tm_defines="${tm_defines} TARGET_64BIT_DEFAULT=(OPTION_MASK_ISA_64BIT|OPTION_MASK_ABI_64)"
 	tm_defines="${tm_defines} TARGET_BI_ARCH=0"
 	with_cpu=${with_cpu:-core2}
+	# TODO: bump this for OS versions that require haswell.
+	with_arch=${with_arch:-core2}
 	tmake_file="${tmake_file} t-slibgcc"
 	;;
 x86_64-*-darwin*)
 	with_cpu=${with_cpu:-core2}
+	with_arch_64=${with_arch_64:-core2}
 	tmake_file="${tmake_file} ${cpu_type}/t-darwin64-biarch t-slibgcc"
 	tm_file="${cpu_type}/darwin64-biarch.h ${tm_file} "
 	;;
@@ -3270,17 +3280,8 @@ rx-*-linux*)
 	tm_file="elfos.h linux.h glibc-stdint.h rx/linux.h ../../libgcc/config/rx/rx-abi.h"
 	tmake_file="${tmake_file} rx/t-linux"
 	;;
-s390-*-linux*)
-	tm_file="s390/s390.h elfos.h gnu-user.h linux.h glibc-stdint.h s390/linux.h"
-	c_target_objs="${c_target_objs} s390-c.o"
-	cxx_target_objs="${cxx_target_objs} s390-c.o"
-	if test x$enable_targets = xall; then
-		tmake_file="${tmake_file} s390/t-linux64"
-	fi
-	tmake_file="${tmake_file} s390/t-s390"
-	;;
 s390x-*-linux*)
-	tm_file="s390/s390x.h s390/s390.h elfos.h gnu-user.h linux.h glibc-stdint.h s390/linux.h"
+	tm_file="s390/s390.h elfos.h gnu-user.h linux.h glibc-stdint.h s390/linux.h"
 	tm_p_file="linux-protos.h s390/s390-protos.h"
 	c_target_objs="${c_target_objs} s390-c.o"
 	cxx_target_objs="${cxx_target_objs} s390-c.o"
@@ -3290,7 +3291,7 @@ s390x-*-linux*)
 	tmake_file="${tmake_file} s390/t-linux64 s390/t-s390"
 	;;
 s390x-ibm-tpf*)
-	tm_file="s390/s390x.h s390/s390.h elfos.h glibc-stdint.h s390/tpf.h"
+	tm_file="s390/s390.h elfos.h glibc-stdint.h s390/tpf.h"
 	tm_p_file=s390/s390-protos.h
 	c_target_objs="${c_target_objs} s390-c.o"
 	cxx_target_objs="${cxx_target_objs} s390-c.o"
@@ -5883,7 +5884,7 @@ case "${target}" in
 		fi
 		;;
 
-	s390*-*-*)
+	s390x-*-*)
 		supported_defaults="arch mode tune"
 
 		for which in arch tune; do
@@ -5900,8 +5901,12 @@ case "${target}" in
 		done
 
 		case ${with_mode} in
-		"" | esa | zarch)
+		"" | zarch)
 			# OK
+			;;
+		esa)
+			echo "ESA/390 mode is no longer supported." 1>&2
+			exit 1
 			;;
 		*)
 			echo "Unknown architecture mode used in --with-mode=$with_mode." 1>&2

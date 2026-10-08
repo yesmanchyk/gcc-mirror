@@ -1,4 +1,5 @@
-       *> { dg-do run }
+      *> Do not edit this generated file.  See README.txt
+      *> { dg-do run }
        *> { dg-options "-dialect mf" }
        *> { dg-output-file "group2/CBL_OPEN_FILE___CBL_CLOSE_FILE.out" }
 
@@ -14,7 +15,7 @@
         .
           object-computer. Posix.
 
-        >>define FILE_NAME as "/tmp/thisfileshouldneverexist.txt"
+        >>define FILE_NAME as "thisfileshouldneverexist.txt"
 
         data division.
         working-storage section.
@@ -41,13 +42,13 @@
         open-ro.
           move 1 to access-mode.
           display "Opening /dev/null as read-only"
-          call "CBL_OPEN_FILE" using "/dev/null"
+          call "CBL_OPEN_FILE" using Z"/dev/null"
                                      access-mode
                                      deny-mode
                                      device
                                      file-handle
           if return-code <> 0
-            display "Failed to open " FILE_NAME " with " return-code
+            display "Failed to open " Z"/dev/null" " with " return-code
           else
             call "CBL_CLOSE_FILE" using file-handle
           end-if.
@@ -64,9 +65,9 @@
                                      access-mode
                                      deny-mode
                                      device
-                                     file-handle
-                                     returning file-status.
-          if file-status <> 0
+                                     file-handle.
+          if return-code <> 0
+            move return-code to file-status
             display "Expected failure when opening " FILE_NAME
             display "File status MSB: " msb
             display "File status LSB: " lsb

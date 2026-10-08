@@ -286,6 +286,32 @@ DEFINE_RISCV_EXT(
   /* EXTRA_EXTENSION_FLAGS */ 0)
 
 DEFINE_RISCV_EXT(
+  /* NAME */ ziccamoc,
+  /* UPPERCASE_NAME */ ZICCAMOC,
+  /* FULL_NAME */ "Main memory supports compare-and-swap atomics",
+  /* DESC */ "",
+  /* URL */ ,
+  /* DEP_EXTS */ ({}),
+  /* SUPPORTED_VERSIONS */ ({{1, 0}}),
+  /* FLAG_GROUP */ zi,
+  /* BITMASK_GROUP_ID */ BITMASK_NOT_YET_ALLOCATED,
+  /* BITMASK_BIT_POSITION*/ BITMASK_NOT_YET_ALLOCATED,
+  /* EXTRA_EXTENSION_FLAGS */ 0)
+
+DEFINE_RISCV_EXT(
+  /* NAME */ ziccid,
+  /* UPPERCASE_NAME */ ZICCID,
+  /* FULL_NAME */ "Instruction/data coherence and consistency extension",
+  /* DESC */ "",
+  /* URL */ ,
+  /* DEP_EXTS */ ({"ziccif"}),
+  /* SUPPORTED_VERSIONS */ ({{1, 0}}),
+  /* FLAG_GROUP */ zi,
+  /* BITMASK_GROUP_ID */ BITMASK_NOT_YET_ALLOCATED,
+  /* BITMASK_BIT_POSITION*/ BITMASK_NOT_YET_ALLOCATED,
+  /* EXTRA_EXTENSION_FLAGS */ 0)
+
+DEFINE_RISCV_EXT(
   /* NAME */ ziccif,
   /* UPPERCASE_NAME */ ZICCIF,
   /* FULL_NAME */ "Main memory supports instruction fetch with atomicity requirement",
@@ -1729,9 +1755,35 @@ DEFINE_RISCV_EXT(
   /* EXTRA_EXTENSION_FLAGS */ 0)
 
 DEFINE_RISCV_EXT(
+  /* NAME */ smcdeleg,
+  /* UPPERCASE_NAME */ SMCDELEG,
+  /* FULL_NAME */ "Machine-mode counter delegation extension",
+  /* DESC */ "",
+  /* URL */ ,
+  /* DEP_EXTS */ ({"ssccfg"}),
+  /* SUPPORTED_VERSIONS */ ({{1, 0}}),
+  /* FLAG_GROUP */ sm,
+  /* BITMASK_GROUP_ID */ BITMASK_NOT_YET_ALLOCATED,
+  /* BITMASK_BIT_POSITION*/ BITMASK_NOT_YET_ALLOCATED,
+  /* EXTRA_EXTENSION_FLAGS */ 0)
+
+DEFINE_RISCV_EXT(
   /* NAME */ smcntrpmf,
   /* UPPERCASE_NAME */ SMCNTRPMF,
   /* FULL_NAME */ "Cycle and instret privilege mode filtering",
+  /* DESC */ "",
+  /* URL */ ,
+  /* DEP_EXTS */ ({"zicsr"}),
+  /* SUPPORTED_VERSIONS */ ({{1, 0}}),
+  /* FLAG_GROUP */ sm,
+  /* BITMASK_GROUP_ID */ BITMASK_NOT_YET_ALLOCATED,
+  /* BITMASK_BIT_POSITION*/ BITMASK_NOT_YET_ALLOCATED,
+  /* EXTRA_EXTENSION_FLAGS */ 0)
+
+DEFINE_RISCV_EXT(
+  /* NAME */ smctr,
+  /* UPPERCASE_NAME */ SMCTR,
+  /* FULL_NAME */ "Machine-mode control transfer records extension",
   /* DESC */ "",
   /* URL */ ,
   /* DEP_EXTS */ ({"zicsr"}),
@@ -1846,6 +1898,19 @@ DEFINE_RISCV_EXT(
   /* EXTRA_EXTENSION_FLAGS */ 0)
 
 DEFINE_RISCV_EXT(
+  /* NAME */ ssccfg,
+  /* UPPERCASE_NAME */ SSCCFG,
+  /* FULL_NAME */ "Supervisor-mode counter configuration extension",
+  /* DESC */ "",
+  /* URL */ ,
+  /* DEP_EXTS */ ({"sscsrind"}),
+  /* SUPPORTED_VERSIONS */ ({{1, 0}}),
+  /* FLAG_GROUP */ ss,
+  /* BITMASK_GROUP_ID */ BITMASK_NOT_YET_ALLOCATED,
+  /* BITMASK_BIT_POSITION*/ BITMASK_NOT_YET_ALLOCATED,
+  /* EXTRA_EXTENSION_FLAGS */ 0)
+
+DEFINE_RISCV_EXT(
   /* NAME */ ssccptr,
   /* UPPERCASE_NAME */ SSCCPTR,
   /* FULL_NAME */ "Main memory supports page table reads",
@@ -1885,6 +1950,19 @@ DEFINE_RISCV_EXT(
   /* EXTRA_EXTENSION_FLAGS */ 0)
 
 DEFINE_RISCV_EXT(
+  /* NAME */ ssctr,
+  /* UPPERCASE_NAME */ SSCTR,
+  /* FULL_NAME */ "Supervisor-mode control transfer records extension",
+  /* DESC */ "",
+  /* URL */ ,
+  /* DEP_EXTS */ ({"zicsr"}),
+  /* SUPPORTED_VERSIONS */ ({{1, 0}}),
+  /* FLAG_GROUP */ ss,
+  /* BITMASK_GROUP_ID */ BITMASK_NOT_YET_ALLOCATED,
+  /* BITMASK_BIT_POSITION*/ BITMASK_NOT_YET_ALLOCATED,
+  /* EXTRA_EXTENSION_FLAGS */ 0)
+
+DEFINE_RISCV_EXT(
   /* NAME */ sscsrind,
   /* UPPERCASE_NAME */ SSCSRIND,
   /* FULL_NAME */ "Supervisor-mode indirect CSR access",
@@ -1914,6 +1992,19 @@ DEFINE_RISCV_EXT(
   /* NAME */ sspm,
   /* UPPERCASE_NAME */ SSPM,
   /* FULL_NAME */ "Supervisor-mode pointer masking extension",
+  /* DESC */ "",
+  /* URL */ ,
+  /* DEP_EXTS */ ({}),
+  /* SUPPORTED_VERSIONS */ ({{1, 0}}),
+  /* FLAG_GROUP */ ss,
+  /* BITMASK_GROUP_ID */ BITMASK_NOT_YET_ALLOCATED,
+  /* BITMASK_BIT_POSITION*/ BITMASK_NOT_YET_ALLOCATED,
+  /* EXTRA_EXTENSION_FLAGS */ 0)
+
+DEFINE_RISCV_EXT(
+  /* NAME */ ssqosid,
+  /* UPPERCASE_NAME */ SSQOSID,
+  /* FULL_NAME */ "Supervisor-mode quality-of-service ID extension",
   /* DESC */ "",
   /* URL */ ,
   /* DEP_EXTS */ ({}),
@@ -2059,6 +2150,19 @@ DEFINE_RISCV_EXT(
   /* NAME */ svpbmt,
   /* UPPERCASE_NAME */ SVPBMT,
   /* FULL_NAME */ "Page-based memory types extension",
+  /* DESC */ "",
+  /* URL */ ,
+  /* DEP_EXTS */ ({}),
+  /* SUPPORTED_VERSIONS */ ({{1, 0}}),
+  /* FLAG_GROUP */ sv,
+  /* BITMASK_GROUP_ID */ BITMASK_NOT_YET_ALLOCATED,
+  /* BITMASK_BIT_POSITION*/ BITMASK_NOT_YET_ALLOCATED,
+  /* EXTRA_EXTENSION_FLAGS */ 0)
+
+DEFINE_RISCV_EXT(
+  /* NAME */ svrsw60t59b,
+  /* UPPERCASE_NAME */ SVRSW60T59B,
+  /* FULL_NAME */ "Page-table reserved-for-software bits 60-59 extension",
   /* DESC */ "",
   /* URL */ ,
   /* DEP_EXTS */ ({}),

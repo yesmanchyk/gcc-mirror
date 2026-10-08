@@ -1,3 +1,229 @@
+2026-09-25  Jerry DeLisle  <jvdelisle@gcc.gnu.org>
+
+	PR libfortran/127347
+	* caf/shmem.c (_gfortran_caf_co_broadcast, _gfortran_caf_co_sum)
+	(_gfortran_caf_co_min, _gfortran_caf_co_max)
+	(_gfortran_caf_co_reduce): Report a terminated image of the team
+	through STAT.
+	* caf/shmem/collective_subroutine.c (collsub_sync): Return whether
+	the images were synchronized.
+	(collsub_reduce_array, collsub_broadcast_array): Likewise.  Give up
+	when an image of the team terminated.
+	* caf/shmem/collective_subroutine.h (collsub_reduce_array)
+	(collsub_broadcast_array): Adjust.
+
+2026-09-24  Jerry DeLisle  <jvdelisle@gcc.gnu.org>
+
+	PR libfortran/127347
+	* caf/shmem.c (_gfortran_caf_sync_all, _gfortran_caf_sync_team):
+	Have the effect of SYNC MEMORY with a stopped image.  Check the
+	images of the team synchronized.
+	(_gfortran_caf_sync_images): Check the images synchronized.  Fix
+	the format of the duplicate image error.
+	(mark_stopped, _gfortran_caf_fail_image): Tell leave_teams whether
+	the image stopped.
+	(_gfortran_caf_co_broadcast, _gfortran_caf_co_sum)
+	(_gfortran_caf_co_min, _gfortran_caf_co_max)
+	(_gfortran_caf_co_reduce): Report terminated images of the team.
+	* caf/shmem/collective_subroutine.c (collsub_sync): Give up when an
+	image of the team terminated.
+	* caf/shmem/counter_barrier.c (counter_barrier_init): Initialize the
+	new fields.
+	(next_round, wait_round): New functions.
+	(counter_barrier_wait): Use wait_round.  Take part in the next round
+	when a round is aborted.
+	(counter_barrier_wait_abortable, counter_barrier_abort_locked): New
+	functions.
+	* caf/shmem/counter_barrier.h (counter_barrier): Make
+	curr_wait_group a round number.  Add aborted_round,
+	abortable_arrivals and aborting.
+	(counter_barrier_wait_abortable, counter_barrier_abort_locked):
+	Declare.
+	* caf/shmem/sync.c (sync_all): Return whether the images were
+	synchronized.
+	(sync_team_unless_stopped): New function.
+	* caf/shmem/sync.h (sync_all): Adjust.
+	(sync_team_unless_stopped): Declare.
+	* caf/shmem/teams_mgmt.c (count_images, team_terminated_images)
+	(update_teams_images_locked, leave_team): New functions.
+	(update_teams_images): Use update_teams_images_locked.
+	(leave_teams): Add stopped argument.  Use leave_team.
+	(check_health): Classify the given images.  Return the stat value.
+	* caf/shmem/teams_mgmt.h (leave_teams, check_health): Adjust.
+	(TEAM_HEALTH_CHECK): New macro.
+	(HEALTH_CHECK): Use it.
+
+2026-09-24  Jerry DeLisle  <jvdelisle@gcc.gnu.org>
+
+	PR libfortran/127347
+	* caf/shmem.c (mark_stopped): New function.
+	(_gfortran_caf_stop_numeric, _gfortran_caf_stop_str): Call it.
+	(_gfortran_caf_fail_image): Call leave_teams.
+	* caf/shmem/supervisor.c (supervisor_main_loop): Keep the status an
+	image recorded for itself.
+	* caf/shmem/sync.c (sync_table): Use the total number of images as
+	the row stride.  Handle an image list and all images alike.
+	* caf/shmem/teams_mgmt.c (leave_teams): New function.
+	* caf/shmem/teams_mgmt.h (leave_teams): Declare.
+
+2026-09-24  Jerry DeLisle  <jvdelisle@gcc.gnu.org>
+
+	PR libfortran/127347
+	* caf/shmem.c (mark_error_stopped): New function.
+	(_gfortran_caf_error_stop_str, _gfortran_caf_error_stop): Call it.
+	* caf/shmem/supervisor.c (supervisor_main_loop): Terminate all
+	images when an image error stopped.
+	* caf/shmem/supervisor.h (image_status): Add IMAGE_ERROR_STOP.
+
+2026-09-06  Jerry DeLisle  <jvdelisle@gcc.gnu.org>
+
+	PR fortran/126964
+	* intrinsics/associated.c (stride_in_bytes): New function.
+	(associated): Require the element length or the span to agree
+	rather than the span alone, and compare the stride in bytes
+	rather than the stride.
+
+2026-09-04  Iain Sandoe  <iain@sandoe.co.uk>
+
+	* configure: Regenerate.
+	* configure.ac: Account for missing runtime support for
+	PTHREAD_PROCESS_SHARED on Darwin versions earlier that
+	Darwin11.
+
+2026-09-04  Jerry DeLisle  <jvdelisle@gcc.gnu.org>
+
+	PR fortran/126777
+	* caf/single.c (_gfortran_caf_team_number): Treat a null team
+	handle as the current team.
+
+2026-08-13  Mikael Morin  <mikael@gcc.gnu.org>
+
+	PR fortran/126799
+	* caf/shmem/collective_subroutine.c (collsub_broadcast_array): Use
+	the element length field instead of the span field as element size.
+
+2026-08-13  Mikael Morin  <mikael@gcc.gnu.org>
+
+	PR fortran/126799
+	* caf/shmem/collective_subroutine.c (collsub_reduce_array): Use
+	the element length field instead of the span field as element size.
+
+2026-08-03  Jerry DeLisle  <jvdelisle@gcc.gnu.org>
+
+	PR libfortran/118793
+	* io/io.h (NML_ERR_MSG_LEN): New macro.
+	(st_parameter_dt): Add nml_err_pending bit.
+	(gfc_unit): Add nml_err_msg.
+	* io/list_read.c (nml_error): New function.
+	(eat_separator): Use new function
+	(convert_integer): Likewise.
+	(convert_unsigned): Likewise.
+	(parse_repeat): Likewise.  Save the position where the repeat
+	count starts and report it.
+	(read_logical): Likewise.
+	(read_integer): Likewise.
+	(parse_real): Likewise.
+	(read_complex): Likewise.
+	(read_real): Likewise.
+	(check_type): Likewise.
+	(list_formatted_read_scalar): Likewise.
+	(read_character): Likewise.  Save the initial position of the value
+	(nml_read_obj): Unwind to nml_err_ret on a deferred error.
+	(namelist_read): Store deferred errors in the unit's nml_err_msg
+	buffer.
+
+2026-07-26  Jerry DeLisle  <jvdelisle@gcc.gnu.org>
+
+	* intrinsics/reduce.c (reduce): Fix the mask_present.
+
+2026-07-25  John David Anglin  <danglin@gcc.gnu.org>
+
+	* intrinsics/ceill_16.c: Fix whitespace.
+
+2026-07-24  John David Anglin  <danglin@gcc.gnu.org>
+
+	PR libfortran/126305
+	* c99_protos.h (acosl, acoshl, asinl, asinhl,atan2l, atanl,
+	atanhl, ceill, cosl, coshl, expl, hypotl, logl, sinl, sinhl,
+	sqrtl, tanl, tanhl, truncl, nextafterl, powl, erfl, erfcl):
+	Add declarations.
+	* configure.ac (powl, erfl): Add GCC_CHECK_MATH_FUNCs.
+	* configure: Regenerate.
+	* config.h.in: Regenerate.
+	* intrinsics/c99_functions.c: Include math_imp.h.  Move code
+	to manipulate the floating-point type to math_imp.h.
+	(erfl, erfcl, acosl, acoshl, asinl, asinhl, atan2l, atanl,
+	atanhl, ceill, cosl, coshl, expl, floorl, fmodl, hypotl,
+	logl, sinl, sinhl, sqrtl, tanl, tanhl, truncl, nextafterl,
+	powl, log10l): Implement.
+	(frexpl): Move code to intrinsics/frexpl_16.c.
+	(scalbnl): Move code to intrinsics/scalbnl_16.c.
+	* intrinsics/ceill_16.c: New.
+	* intrinsics/floorl_16.c: New.
+	* intrinsics/frexpl_16.c: New.
+	* intrinsics/math_imp.h: New.
+	* intrinsics/nextafterl_16.c: New.
+	* intrinsics/scalbnl_16.c: New.
+	* intrinsics/truncl_16.c: New.
+	* libgfortran.h (USE_LIBQUADLIB): Define on hppa-hpux.
+
+2026-07-19  Jerry DeLisle  <jvdelisle@gcc.gnu.org>
+
+	PR libfortran/93727
+	* io/list_read.c (parse_real): Parse the possible hexadecimal
+	float formatted and then allow the convert_real function to
+	validate the result.
+
+2026-07-15  John David Anglin  <danglin@gcc.gnu.org>
+
+	* caf/shmem/shared_memory.c (shared_memory_set_env): Don't
+	quote ENV_PPID.
+	(shared_memory_init) Don't quote ENV_BASE.
+
+2026-07-15  John David Anglin  <danglin@gcc.gnu.org>
+
+	* libgfortran.h (FMT_Z): Define.
+	* caf/shmem/alloc.c (get_memory_by_id_internal): Use FMT_Z.
+	(alloc_free_memory_with_id): Likewise.
+	* caf/shmem/supervisor.c (get_memory_size_from_envvar): Likewise.
+	* caf/shmem/thread_support.c (get_handle): Likewise.
+	(thread_support_init_supervisor): Likewise.
+	* intrinsics/reduce.c (reduce): Likewise.
+
+2026-07-15  John David Anglin  <danglin@gcc.gnu.org>
+
+	PR libfortran/125623
+	* c99_protos.h: (strnlen, frexpl, scalbnl): Declare if HAVE_STRNLEN,
+	HAVE_FREXPL, HAVE_SCALBNL aren't defined, respectively.
+	* intrinsics/c99_functions.c (strnlen, frexpl, scalbnl): Implement.
+	* libgfortran.h: Include string.h if HAVE_STRING_H.
+
+2026-07-15  John David Anglin  <danglin@gcc.gnu.org>
+
+	* caf/shmem/shared_memory.c (SHM_NAME_FMTD, SHM_NAME_FMTS): Define.
+	(shared_memory_init) Use SHM_NAME_FMTD format to generate
+	shm_name.
+	(shared_memory_cleanup): Use SHM_NAME_FMTS to generate shm_name.
+	* caf/shmem/supervisor.c (get_memory_size_from_envvar): Use
+	1 GB on 64-bit Windows and HP-UX.
+
+2026-07-08  Jerry DeLisle  <jvdelisle@gcc.gnu.org>
+
+	PR libfortran/126116
+	* io/io.h (struct gfc_unit): Add bool for tracking.
+	Fix some white space problems.
+	* io/unit.c (close_unit_1): Add a declaration for this
+	function so it can be called before it has been defined.
+	Use the new bool.
+	(is_internal_reserved): New helper function. Returns true
+	only if the unit is not null and the internal unit kind is zero
+	meaning its not a character string.
+	(find_unit): Use the new helper function
+	(find_or_create_unit): Use the new helper.
+	(get_unit): Set the new bool.
+	(close_unit): Update the close_unit_1 argument list.
+	(close_units): Likewise.
+
 2026-07-06  Harald Anlauf  <anlauf@gmx.de>
 
 	PR fortran/121366

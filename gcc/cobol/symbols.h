@@ -46,6 +46,7 @@
 #include <string>
 #include <vector>
 
+// The ISO spec says there is a
 #define PICTURE_MAX 64
 
 extern const char *numed_message;
@@ -64,11 +65,11 @@ cbl_dialect_str(cbl_dialect_t dialect)  {
   case dialect_mf_e | dialect_gnu_e:  return "mf or gnu";
   case dialect_ibm_e | dialect_mf_e | dialect_gnu_e:  return "ibm or mf or gnu";
   }
-  
+
   return "???";
 }
 
-// Dialects may be combined. 
+// Dialects may be combined.
 extern unsigned int cbl_dialects;
 void cobol_dialect_set( cbl_dialect_t dialect );
 
@@ -127,61 +128,61 @@ enum cbl_division_t {
  */
 enum dspc_t {
   dspc_identification_div_e,
-  dspc_options_para_e, 
-  dspc_arithmetic_clause_e, 
-  dspc_default_rounded_clause_e, 
-  dspc_entry_convention_clause_e, 
-  dspc_float_binary_clause_e, 
-  dspc_float_decimal_clause_e, 
-  dspc_initialize_clause_e, 
-  dspc_intermediate_rounding_clause_e, 
+  dspc_options_para_e,
+  dspc_arithmetic_clause_e,
+  dspc_default_rounded_clause_e,
+  dspc_entry_convention_clause_e,
+  dspc_float_binary_clause_e,
+  dspc_float_decimal_clause_e,
+  dspc_initialize_clause_e,
+  dspc_intermediate_rounding_clause_e,
 
   dspc_environment_div_e,
-  dspc_configuration_section_e, 
-  dspc_source_computer_paragraph_e, 
+  dspc_configuration_section_e,
+  dspc_source_computer_paragraph_e,
   dspc_object_computer_paragraph_e,
-  
-  dspc_i_o_section_e, 
+
+  dspc_i_o_section_e,
 
   // special names clauses
-  dspc_special_names_paragraph_e, 
-  dspc_alphabet_name_clause_e, 
+  dspc_special_names_paragraph_e,
+  dspc_alphabet_name_clause_e,
   dspc_class_clause_e,
   dspc_crt_status_clause_e,
-  dspc_currency_sign_clause_e, 
+  dspc_currency_sign_clause_e,
   dspc_cursor_clause_e,
-  dspc_decimal_point_is_comma_clause_e, 
-  dspc_device_clause_e, 
+  dspc_decimal_point_is_comma_clause_e,
+  dspc_device_clause_e,
   dspc_dynamic_length_structure_clause_e,
-  dspc_feature_clause_e, 
-  dspc_locale_clause_e, 
+  dspc_feature_clause_e,
+  dspc_locale_clause_e,
   dspc_order_table_clause_e,
-  dspc_switch_clause_e, 
-  dspc_symbolic_characters_clause_e, 
+  dspc_switch_clause_e,
+  dspc_symbolic_characters_clause_e,
 
-  dspc_repository_paragraph_e, 
+  dspc_repository_paragraph_e,
   dspc_input_output_section_e,
-  dspc_file_control_paragraph_e, 
-  dspc_i_o_control_paragraph_e, 
+  dspc_file_control_paragraph_e,
+  dspc_i_o_control_paragraph_e,
 
   dspc_data_div_e, // sorted by alphabetically by section and clause
-  dspc_linkage_section_e, 
+  dspc_linkage_section_e,
 
-  dspc_file_section_e, 
-  dspc_local_storage_section_e, 
-  dspc_report_section_e, 
-  dspc_screen_section_e, 
-  dspc_working_storage_section_e, 
+  dspc_file_section_e,
+  dspc_local_storage_section_e,
+  dspc_report_section_e,
+  dspc_screen_section_e,
+  dspc_working_storage_section_e,
 
   // not used: parser checks only the Data Division Section.
-  dspc_77_level_description_entry_e, 
-  dspc_constant_entry_e, 
-  dspc_file_description_entry_e, 
-  dspc_record_description_entry_e, 
-  dspc_report_group_description_entry_e, 
-  dspc_screen_description_entry_e, 
-  dspc_sort_merge_file_description_entry_e, 
-  dspc_type_declaration_entry_e, 
+  dspc_77_level_description_entry_e,
+  dspc_constant_entry_e,
+  dspc_file_description_entry_e,
+  dspc_record_description_entry_e,
+  dspc_report_group_description_entry_e,
+  dspc_screen_description_entry_e,
+  dspc_sort_merge_file_description_entry_e,
+  dspc_type_declaration_entry_e,
 
   dspc_procedure_div_e,
   dspc_procedure_header_e,
@@ -304,15 +305,15 @@ enum symbol_type_t {
   SymAlphabet,
   SymFile,
   SymDataSection,
-  SymLocale, 
+  SymLocale,
 };
 
 // From Enterprise COBOL for z/OS 6.4 Language Reference, Appendix B.
 // ISO specifies no limit in 13.18.40.3 Syntax rules.
-// CobolCraft sometimes needs 2,100,000 or about 2 MB. 
+// CobolCraft sometimes needs 2,100,000 or about 2 MB.
 #ifdef COBOL_MAXIMUM_ALPHA_LENGTH
 # define MAXIMUM_ALPHA_LENGTH size_t(COBOL_MAXIMUM_ALPHA_LENGTH)
-#else 
+#else
 # define IBM_MAXIMUM_ALPHA_LENGTH (size_t(1) << 31)
 # define MAXIMUM_ALPHA_LENGTH IBM_MAXIMUM_ALPHA_LENGTH
 #endif
@@ -387,7 +388,7 @@ public:
   cbl_field_data_t( uint32_t memsize,  uint32_t nbyte,
                     uint32_t digits,  uint32_t rdigits,
                     const char *initial,
-                    const char *picture = NULL ) 
+                    const char *picture = NULL )
     : nbyte(nbyte)
     , orig(initial)
     , memsize(memsize)
@@ -401,7 +402,7 @@ public:
 
   inline uint32_t capacity( uint32_t size ) { return nbyte = size; }
   inline uint32_t capacity() const          { return nbyte; }
-  
+
   inline uint32_t add_capacity( uint32_t size ) { return nbyte += size; }
 
   cbl_field_data_t( const cbl_field_data_t& that ) {
@@ -437,15 +438,15 @@ public:
       dbgmsg("%s:%d: type is %s", __func__, __LINE__, etc_type_str());
     }
     return etc.value;
-  } 
+  }
   tree& operator=( tree v) {
     etc_type = value_e;
     return etc.value = v;
-  } 
+  }
   tree& operator=(int i) {
     etc_type = value_e;
     return etc.value = build_int_cst_type(integer_type_node, i);
-  } 
+  }
 
   tree_code value_type() const {
     gcc_assert(etc_type == value_e);
@@ -469,7 +470,7 @@ public:
     return INTEGRAL_TYPE_P(node);
   }
 
-  // verify is numeric and zero fraction 
+  // verify is numeric and zero fraction
   std::pair<int64_t, bool> int64_of() const {
     if( etc_type == value_e ) {
       auto r = TREE_REAL_CST_PTR( value_of() );
@@ -515,7 +516,7 @@ public:
     double d;
     int n;
     int erc = sscanf(input.c_str(), "%lf%n", &d, &n);
-    
+
     if( erc < 0 || size_t(n) != input.size() ) {
       dbgmsg("%s: error: could not interpret '%s' of '%s' as a number",
              __func__, initial + n, initial);
@@ -546,7 +547,7 @@ public:
     this->orig = orig_t( orig, all );
     return this->orig.data;
   }
-  // Set the computed cce value.  Do not impute capacity. 
+  // Set the computed cce value.  Do not impute capacity.
   void original( REAL_VALUE_TYPE value ) {
     orig = orig_t(value);
   }
@@ -572,7 +573,7 @@ public:
       case upsi_e:
         etc.upsi_mask = that.etc.upsi_mask;
         break;
-      } 
+      }
     return *this;
   }
 };
@@ -673,7 +674,7 @@ bool         __gg__encoding_iconv_valid( cbl_encoding_t encoding );
 
 bool is_elementary( enum cbl_field_type_t type );
 
-// These were introduced to discourage the use of 
+// These were introduced to discourage the use of
 //    current_encoding('A') and current_encoding('N')
 enum
   {
@@ -705,7 +706,7 @@ struct cbl_field_t {
       friend bool cobol_national_encoding( const char name[] );
       encodings_t alpha, national;
       const encodings_t possible_sources[2] = {}, *source = 0;
-      
+
       default_encodings_t( const encodings_t& alpha,
                            const std::vector<encodings_t>& possible_sources )
         : alpha(alpha)
@@ -782,10 +783,10 @@ struct cbl_field_t {
       std::vector<char> frag(len);
       std::transform(picture_fragment, picture_fragment + len,
                      frag.begin(), ftoupper);
-      switch(frag[0]) { 
+      switch(frag[0]) {
       case 'A': case 'X': case '9':
         return set(current_encoding(display_encoding_e));
-      case 'N': case 'U': 
+      case 'N': case 'U':
         if( std::all_of(frag.begin(), frag.end(),
                         [first = frag[0]]( char ch ) {
                           return first == ch;
@@ -795,7 +796,7 @@ struct cbl_field_t {
                                     : UTF8_e;
           return set(enc);
         }
-        return false; // They all must be the same. 
+        return false; // They all must be the same.
       }
       gcc_unreachable();
     }
@@ -842,7 +843,7 @@ struct cbl_field_t {
 
   cbl_field_t( cbl_field_type_t type, uint64_t attr,
                const cbl_field_data_t& data,
-               uint32_t level, const cbl_name_t name, 
+               uint32_t level, const cbl_name_t name,
                const cbl_field_t::codeset_t& codeset )
     : offset(0), type(type), usage(FldInvalid), attr(attr)
     , parent(0), our_index(0), level(level), codeset(codeset)
@@ -911,7 +912,7 @@ struct cbl_field_t {
 
     data  = that.data;
     codeset = that.codeset;
-    
+
     if( ! (is_typedef || that.type == FldClass) ) {
       data.initial = NULL;
       data = build_zero_cst (float128_type_node);
@@ -1071,8 +1072,8 @@ struct cbl_refer_t {
     refmod = that.refmod;
     return *this;
   }
-    
-  
+
+
   cbl_refer_t duplicate() const {
     return cbl_refer_t( field, subscripts, refmod );
   }
@@ -1107,6 +1108,34 @@ struct cbl_refer_t {
     assert( FldConditional == field->type);
     return field;
   }
+};
+
+/*
+ * An element in the RPN stack for expression evaluation, either an operation
+ * or an operand.  A NUL operator indicates an operand.
+ */
+struct rpn_t {
+  char op;
+  cbl_refer_t term;
+  rpn_t( char op ) : op(op) { // cppcheck-suppress noExplicitConstructor
+    static const char ops[] = "+-*/^!";
+    gcc_assert( std::any_of(ops, ops + sizeof(ops),
+                            [op]( char ch ) { return op == ch; }) );
+  }
+  rpn_t( const cbl_refer_t &term ) // cppcheck-suppress noExplicitConstructor
+    : op('\0'), term(term)
+  {}
+};
+
+struct expr_t {
+  char op;
+  cbl_refer_t lhs, rhs;
+  cbl_label_t *lbl;
+  expr_t( char op,
+          const cbl_refer_t& lhs, const cbl_refer_t& rhs,
+          cbl_label_t *lbl )
+    : op(op), lhs(lhs), rhs(rhs), lbl(lbl)
+  {}
 };
 
 struct elem_key_t {
@@ -1179,6 +1208,8 @@ symbol_field_index_set( cbl_field_t *field );
 bool
 symbol_field_type_update( cbl_field_t *field,
                           cbl_field_type_t type, bool is_usage );
+
+void symbol_field_capacity_set( cbl_field_t *field );
 
 struct sort_key_t;
 struct sort_key_t;
@@ -1368,7 +1399,7 @@ struct parameter_t {
 
 /*
  * Map symbol table index of procedure/function to formal parameters.
- * Index may refer to definition or prototype. 
+ * Index may refer to definition or prototype.
  */
 typedef std::map<size_t, std::vector<parameter_t>> parameter_map;
 
@@ -1405,6 +1436,9 @@ struct cbl_ffi_arg_t {
     }
     // Update Linkage Section data item.
     refer.field->set_linkage(crv, optional);
+  }
+  bool by_content() const {
+    return crv == by_content_e;
   }
 protected:
   bool by_value() const {
@@ -1523,7 +1557,7 @@ struct cbl_label_t {
 
     // for parser_op/parser_assign error tracking
     struct cbl_compute_error_t *compute_error;
-    
+
     // for parse_xml processing:
     struct cbl_xml_parse_t *xml_parse;
 
@@ -1558,26 +1592,6 @@ struct cbl_label_t {
 };
 
 struct parser_tgt_t;
-
-class cbl_label_ref_t {
-  bool qualified;             // caller mentioned paragraph & section
-  cbl_label_t *target;
-  const cbl_label_t& context; // section called from
-  int line;                   // point of reference
-  parser_tgt_t *handle;
-public:
-  cbl_label_ref_t( size_t program, const cbl_label_t& context, int line,
-                   const char name[], size_t isect = 0 );
-
-  cbl_label_t * target_of() { return target; }
-
-  parser_tgt_t * handle_of(parser_tgt_t *parser_tgt) {
-    return this->handle = parser_tgt;
-  }
-  parser_tgt_t * handle_of() {
-    return this->handle;
-  }
-};
 
 static inline bool
 label_lessthan( const cbl_label_t & a, const cbl_label_t & b ) {
@@ -1631,7 +1645,7 @@ void symbol_temporary_location( const cbl_field_t *field,
 cbl_loc_t symbol_temporary_location( const cbl_field_t *field );
 
 class temporaries_t {
-  friend void symbol_temporaries_free();    
+  friend void symbol_temporaries_free();
   friend void symbol_temporary_location( const cbl_field_t *field,
                                          const cbl_loc_t& loc);
   friend cbl_loc_t symbol_temporary_location( const cbl_field_t *field );
@@ -1671,7 +1685,7 @@ class temporaries_t {
       return value < that.value;
     }
     bool terminated() const {
-      // Z strings include the NUL terminator.   
+      // Z strings include the NUL terminator.
       return !is_verbatim && is_quoted && !value.empty() && '\0' == value.back();
     }
   };
@@ -1683,7 +1697,7 @@ class temporaries_t {
   fieldmap_t used, freed;
 
 public:
-  cbl_field_t * literal( uint32_t len, const char value[], 
+  cbl_field_t * literal( uint32_t len, const char value[],
                          cbl_field_attr_t attr, cbl_encoding_t encoding );
   cbl_field_t * reuse( cbl_field_type_t type );
   cbl_field_t * acquire( cbl_field_type_t type, const cbl_name_t name = nullptr );
@@ -1714,33 +1728,6 @@ enum cbl_intrinsic_trim_t {
   trim_none_e,
   trim_leading_e = 1,
   trim_trailing_e = 2,
-};
-
-enum cbl_ctype_t {
-  c_unknown,
-  c_bool,
-  c_char,
-  c_wchar,
-  c_byte,
-  c_ubyte,
-  c_short,
-  c_ushort,
-  c_int,
-  c_uint,
-  c_long,
-  c_ulong,
-  c_longlong,
-  c_ulonglong,
-  c_size_t,
-  c_ssize_t,
-  c_int128,
-  c_float,
-  c_double,
-  c_longdouble,
-  c_char_p,
-  c_wchar_p,
-  c_void_p,
-  c_nts,      // this is a null-terminated-string char_p
 };
 
 struct function_descr_arg_t {
@@ -1857,22 +1844,26 @@ struct cbl_locale_t {
   }
 };
 
+/*
+ * If SELECT name ASSIGN TO DEVICE is used, the index of the special name is
+ * assigned to cbl_file_t::device.  The device itself never changes.
+ */
 struct cbl_special_name_t {
   int token;
   enum special_name_t id;
   cbl_name_t name;
-  size_t filename;
   char os_filename[16]; // short because always in /dev
 };
 
 char * hex_decode( const char text[] );
+char * hex2numstr( const char text[] );
 
 /*
  * An alphabet may just name an encoding, which implies binary collation.
  *
  * An alphabet may reference a Special-Names LOCALE, which defines an encoding
  * and a collation (perhaps by default).
- * 
+ *
  * During Special-Names parsing, an Alphabet may reference an as-yet undefined
  * LOCALE with an as-yet unknown encoding. As a placeholder it inserts a named,
  * undefined cbl_locale_t symbol, which the Alphabet references.  If that
@@ -1880,8 +1871,8 @@ char * hex_decode( const char text[] );
  * diagnostic at the end of Special-Names.
  *
  * For a custom alphabet of single-byte encoding, cbl_alphabet_t::collation_sequence
- * holds the collation position of each encoded value.  
- * If 'A' sorts first (after LOW-VALUE), then collation_sequence['A'] == 1. 
+ * holds the collation position of each encoded value.
+ * If 'A' sorts first (after LOW-VALUE), then collation_sequence['A'] == 1.
  * If the encoding is ASCII,         then 'A' is  65 and collation_sequence[ 65] == 1.
  * If the encoding is EBCDIC CP1140, then 'A' is 193 and collation_sequence[193] == 1.
  */
@@ -2067,7 +2058,7 @@ struct cbl_file_key_t {
     memset(name, '\0', sizeof(name));
   }
 
-  // Construct a key of length 1 having a single field. 
+  // Construct a key of length 1 having a single field.
   explicit cbl_file_key_t( size_t field, bool unique = true )
     : unique(unique)
     , leftmost(0)
@@ -2136,7 +2127,7 @@ struct cbl_file_t {
   // "The RECORD DELIMITER clause is syntax checked, but has no effect
   //  on the execution of the program."
   enum cbl_file_access_t access;
-  size_t filename;      //
+  size_t filename, device;
   size_t default_record;
   size_t nkey;          // 1st key is primary & unique
   cbl_file_key_t *keys; // indexes into symbol table for key field(s)
@@ -2155,7 +2146,7 @@ struct cbl_file_t {
     cbl_refer_t *nline, *footing, *top, *bottom;
     linage_t()
       : nline(nullptr), footing(nullptr), top(nullptr), bottom(nullptr)
-    {}           
+    {}
   } linage;
   int line;
   cbl_name_t name;
@@ -2170,7 +2161,7 @@ struct cbl_file_t {
     , optional(false)
     , varying_size{ false, 0, 0 }
     , access(file_access_seq_e)
-    , filename(0)
+    , filename(0), device(0)
     , default_record(0)
     , nkey(0)
     , keys(nullptr)
@@ -2181,8 +2172,9 @@ struct cbl_file_t {
   {
     memset(name, '\0', sizeof(name));
   }
-  
+
   bool varies() const { return varying_size.min != varying_size.max; }
+  void assign( special_name_t device ) { this->device = special_index(device); }
   bool validate() const;
   void deforward();
   cbl_file_key_t * keys_update( cbl_file_key_t * keys ) {
@@ -2202,9 +2194,11 @@ struct cbl_file_t {
     return org == file_indexed_e && access == file_access_seq_e;
   }
   void consider_for_default( const cbl_field_t *record );
+  const char * filename_of() const;
  protected:
   bool validate_forward( size_t isym ) const;
   bool validate_key( const cbl_file_key_t& key ) const;
+  static size_t special_index( special_name_t device );
 };
 
 static inline bool
@@ -2236,7 +2230,7 @@ struct symbol_elem_t {
     cbl_section_t      section;
     symbol_elem_u() : field() {}
   } elem;
-  
+
   symbol_elem_t() : type(SymField), program(0) {}
   explicit symbol_elem_t( symbol_type_t type, size_t program = 0 )
     : type(type), program(program)
@@ -2272,7 +2266,7 @@ struct symbol_elem_t {
   {
     elem.section = section;
   }
-  
+
  protected:
   symbol_elem_t& copy_by_type( const symbol_elem_t& that ) {
     switch(type) {
@@ -2389,13 +2383,16 @@ void build_symbol_map();
 bool update_symbol_map( symbol_elem_t *e );
 
 void update_symbol_map2( const symbol_elem_t *elem );
+void update_symbol_map2( const cbl_file_t& file );
 void finalize_symbol_map2();
 void dump_symbol_map2();
+
+bool was_fd_name( const cbl_field_t * field ); // uses symbol_map2, sort of
 
 symbol_elem_t * symbol_register( const char name[] );
 
 std::pair<symbol_elem_t *, bool>
-symbol_find( size_t program, std::list<const char *> names );
+symbol_find( size_t program, std::list<const char *> names, bool diagnose = true );
 symbol_elem_t * symbol_find_of( size_t program,
                                 std::list<const char *> names, size_t group );
 
@@ -2428,7 +2425,7 @@ const cbl_label_t * symbol_program_local( const char called[] );
 
 bool redefine_field( cbl_field_t *field );
 
-const cbl_field_t * 
+const cbl_field_t *
 symbol_unresolved_file_key( const cbl_file_t * file,
                             const cbl_name_t key_field_name );
 
@@ -2505,7 +2502,7 @@ cbl_file_of( const symbol_elem_t *e ) {
 }
 
 // does the element part of a prototype ?
-bool is_prototypical( size_t isym ); 
+bool is_prototypical( size_t isym );
 
 static inline bool
 is_program( const symbol_elem_t& e ) {
@@ -2645,15 +2642,15 @@ struct cbl_prog_hier_t {
     cbl_label_t label;
     program_label_t() : ordinal(0), label() {}
     // because std::copy_if:
-    // cppcheck-suppress noExplicitConstructor 
-    program_label_t( const symbol_elem_t& e ) { 
+    // cppcheck-suppress noExplicitConstructor
+    program_label_t( const symbol_elem_t& e ) {
       assert(is_program(e));
       ordinal = symbol_index(&e);
       label = e.elem.label;
     }
   };
   std::vector<program_label_t> labels;
-  
+
   cbl_prog_hier_t();
 };
 
@@ -2804,10 +2801,11 @@ struct cbl_nameloc_t {
 #include <queue>
 typedef std::list<const char *> cbl_namelist_t;
 typedef std::list<cbl_nameloc_t> cbl_namelocs_t;
+
 class name_queue_t : private std::queue<cbl_namelocs_t>
 {
   friend void tee_up_empty();
-  cbl_namelocs_t recent;
+  const cbl_namelocs_t none;
 
   void allocate() {
     std::queue<cbl_namelocs_t>::push( cbl_namelocs_t() );
@@ -2839,7 +2837,7 @@ class name_queue_t : private std::queue<cbl_namelocs_t>
   }
   cbl_namelocs_t pop() {
     assert(!empty());
-    recent = front();
+    auto recent = front();
     std::queue<cbl_namelocs_t>::pop();
     dump(__func__);
     return recent;
@@ -2850,52 +2848,53 @@ class name_queue_t : private std::queue<cbl_namelocs_t>
 
   void dump( const char tag[] ) const;
 
-  cbl_namelocs_t peek() const { dump(__func__); return empty()? recent : back(); }
+  cbl_namelocs_t peek() const { dump(__func__); return empty()? none : back(); }
 
   bool  empty() const { return std::queue<cbl_namelocs_t>::empty(); }
   size_t size() const { return std::queue<cbl_namelocs_t>::size(); }
 
 };
 
-const std::string& keyword_alias_add( const std::string& keyword,
-				      const std::string& alias );
+std::pair<std::string, bool> keyword_alias_add( const std::string& keyword,
+                                                const std::string& alias );
+
 int binary_integer_usage_of( const char name[] );
-  
+
 void tee_up_empty();
 void tee_up_name( const cbl_loc_t& loc, const char name[] );
 cbl_namelist_t teed_up_names();
 
 size_t end_of_group( size_t igroup );
 
-struct symbol_elem_t * symbol_typedef( size_t program, std::list<const char *> names );
-struct symbol_elem_t * symbol_typedef( size_t program, const char name[] );
-struct symbol_elem_t * symbol_field( size_t program,
-                                     size_t parent, const char name[] );
-struct cbl_label_t *   symbol_label( size_t program, cbl_label_type_t type,
-                                     size_t section, const char name[],
-                                     const char os_name[] = NULL );
-struct symbol_elem_t * symbol_function( size_t parent,
-                                        const char name[], bool prototype = false );
-struct cbl_label_t *   symbol_function_any( size_t parent, const char name[] );
-struct cbl_label_t *   symbol_program( size_t parent,
-                                       const char name[], bool prototype = false );
+symbol_elem_t * symbol_typedef( size_t program, const char name[] );
+symbol_elem_t * symbol_field( size_t program, size_t parent, const char name[] );
+cbl_label_t *   symbol_label( size_t program, cbl_label_type_t type,
+                              size_t section, const char name[],
+                              const char os_name[] = NULL );
+symbol_elem_t * symbol_function( size_t parent,
+                                 const char name[], bool prototype = false );
+cbl_label_t *   symbol_function_any( size_t parent, const char name[] );
+cbl_label_t *   symbol_program( size_t parent,
+                                const char name[], bool prototype = false );
 
-struct symbol_elem_t * symbol_literalA( size_t program, const char name[] );
+symbol_elem_t * symbol_literalA( size_t program, const char name[] );
 
-struct cbl_special_name_t * symbol_special( special_name_t id );
-struct symbol_elem_t * symbol_special( size_t program, const char name[] );
-struct symbol_elem_t * symbol_locale( size_t program, const char name[] );
-struct symbol_elem_t * symbol_alphabet( size_t program, const char name[] );
+cbl_special_name_t * symbol_special( special_name_t id );
+symbol_elem_t * symbol_special( size_t program, const char name[] );
+size_t symbol_special_index( special_name_t device );
 
-struct symbol_elem_t * symbol_file( size_t program, const char name[] );
-struct cbl_field_t   * symbol_file_record( const cbl_file_t *file );
+symbol_elem_t * symbol_locale( size_t program, const char name[] );
+symbol_elem_t * symbol_alphabet( size_t program, const char name[] );
+
+symbol_elem_t * symbol_file( size_t program, const char name[] );
+cbl_field_t   * symbol_file_record( const cbl_file_t *file );
 cbl_file_t::varying_t symbol_file_record_sizes( struct cbl_file_t *file );
-struct cbl_section_t * symbol_section( size_t program,
-                                       struct cbl_section_t *section );
+cbl_section_t * symbol_section( size_t program,
+                                struct cbl_section_t *section );
 
 size_t symbol_label_id( const cbl_label_t *label );
 
-struct cbl_field_t * parent_of( const cbl_field_t *f );
+cbl_field_t * parent_of( const cbl_field_t *f );
  const cbl_field_t * occurs_in( const cbl_field_t *f );
 
 cbl_field_t *rename_not_ok( const cbl_field_t *first, const cbl_field_t *last);
@@ -2963,15 +2962,71 @@ void wsclear( uint32_t ch);
 const uint32_t *wsclear();
 
 int keyword_tok( const char * text, bool include_intrinsics = false );
-int redefined_token( const cbl_name_t name );
+int redefined_token( const cbl_name_t name, int token );
 
+/*
+ * The tokenset for any translation can be changed by COBOL-WORDS, which must
+ * appear before IDENTIFICATION SECTION. The directive may add, delete, or
+ * modify reserved words and context-sensitive words, and the names of
+ * intrinsic functions.
+ *
+ * tokens and token_names are defined in a token_names.h, generated from parse.h.
+ *
+ *  - token_names converts a yytokentype enum to a string form of
+ *    its name as defined in the parser.  It is used by keyword_str.
+ *  - tokens imperfectly maps a lowercase form of the token name to its value.
+ *    It is used by redefined_token.
+ *  - cobol_words enforces the rule that any token name may appear at
+ *    most 1 time in int the COBOL-WORDS directive.
+ *
+ *  EQUATE     adds a new name for a token in tokens.
+ *  UNDEFINE   removes a name from tokens.
+ *  SUBSTITUTE is EQUATE for the first name and UNDEFINE for the second.
+ *  RESERVE    adds a new name to tokens with the invalid value -42.
+ *
+ * The generated lexer of course uses static strings and is thus unaffected by
+ * COBOL-WORDS. The parser accesses the generated lexer via a mediation layer
+ * that deals with the CDF.  That is where COBOL-WORDS are applied.
+ *
+ * There are unsolved problems.
+ *  1.  Some tokens are lexed as more than one text word, or depend on context.
+ *      For example OBJECT COMPUTER and IDENTIFICATION DIVISION. If the user
+ *      substitutes COMPUTING-MACHINE COMPUTER, lexing will fail.
+
+ *  2.  Semantic values are known only to the lexer. Some tokens carry a value
+ *      representing their context. For example, both INVALID and NOT INVALID
+ *      are presented to the parser as INVALID, with the semantic value
+ *      representing the presence (or absence) of NOT. If BOGUS is substituted
+ *      for INVALID, the generated lexer will assume BOGUS is a NAME, and
+ *      assign it the value "BOGUS". When that string is found by
+ *      redefined_token and mapped to INVALID (so the parser can parse it) the
+ *      semantic value is lost.
+ *
+ *  3.  Some names are not NAME tokens, depending on context.  That subtlety is
+ *      also lost.
+ *
+ *  4.  Renamed tokens that trigger changes in Start Condition are either not
+ *      detected by the lexer, or (as names) mistakenly change the SC.
+ *
+ * A robust solution to these problems is tail-wagging-the-dog for this
+ * project. The lexer could be completely rewritten, discarding GNU Flex in
+ * favor of runtime-defined tables. That however represents months of work for
+ * programs that constitute a rounding error in the global COBOL corpus. A
+ * smaller, feasible solution would reject attempts to use COBOL-WORDS that
+ * affect the above problems. The interested reader of this comment is invited
+ * to tackle it.
+ */
+namespace cdf { extern bool any_cobol_words; }
 class current_tokens_t {
   class tokenset_t {
-    // token_names is initialized from a generated header file. 
+    // token_names is initialized from a generated header file.
     std::vector<const char *>token_names;  // position indicates token value
     std::map <std::string, int> tokens;    // aliases
-    std::set<std::string> cobol_words;  // Anything in COBOL-WORDS may appear only once. 
+    std::set<std::string> cobol_words;     // COBOL-WORDS may affect a word only once.
+    std::set<int> undefined;               // removed keywords
   public:
+    enum { reserved_e = -42, undefined_e = -77 };
+
     static std::string
     lowercase( const cbl_name_t name ) {
       cbl_name_t lname;
@@ -2994,29 +3049,25 @@ class current_tokens_t {
       auto lname( lowercase(name) );
       auto cw = cobol_words.insert(lname);
       if( ! cw.second ) {
-        error_msg(loc, "COBOL-WORDS %s: %s may appear but once", verb, name);
+        error_msg(loc, "COBOL-WORDS %s: %qs may appear but once", verb, name);
         return false;
       }
+      cdf::any_cobol_words = true;
       auto p = tokens.find(lowercase(name));
       bool fOK = p == tokens.end();
       if( fOK ) { // name not already in use
         tokens[lname] = token;
         dbgmsg("%s:%d: %d has alias %s", __func__, __LINE__, token, name);
       } else {
-        error_msg(loc, "%s: %s already defined as a token", verb, name);
+        error_msg(loc, "%s: %qs already reserved", verb, name);
       }
       return fOK;
     }
     bool undefine( const cbl_loc_t& loc,
                    const cbl_name_t name, const cbl_name_t verb = "UNDEFINE" ) {
       auto lname( lowercase(name) );
-      auto cw = cobol_words.insert(lname);
-      if( ! cw.second ) {
-        error_msg(loc, "COBOL-WORDS %s: %s may appear but once", verb, name);
-        return false;
-      }
 
-      // Do not erase generic, multi-type tokens COMPUTATIONAL and BINARY_INTEGER.
+      // Do not erase generic, multi-type tokens COMPUTATIONAL and _BINARY_INTEGER.
       if( binary_integer_usage_of(name) ) {
         dbgmsg("%s:%d: generic %s remains valid as a token", __func__, __LINE__, name);
         return true;
@@ -3025,14 +3076,17 @@ class current_tokens_t {
       auto p = tokens.find(lname);
       bool fOK = p != tokens.end();
       if( fOK ) { // name in use
+        cobol_words.insert(p->first);
+        cdf::any_cobol_words = true;
+        undefined.insert(p->second);
         tokens.erase(p);
       } else {
-        error_msg(loc, "%s: %s not defined as a token", verb, name);
+        error_msg(loc, "%s: not a reserved word: %qs", verb, name);
       }
-      dbgmsg("%s:%d: %s removed as a valid token name", __func__, __LINE__, name);
+      dbgmsg("%s:%d: removed as a valid token name: %s", __func__, __LINE__, name);
       return fOK;
     }
-  
+
     bool substitute( const cbl_loc_t& loc,
                      const cbl_name_t extant, int token, const cbl_name_t name ) {
       return
@@ -3044,21 +3098,35 @@ class current_tokens_t {
       auto lname( lowercase(name) );
       auto cw = cobol_words.insert(lname);
       if( ! cw.second ) {
-        error_msg(loc, "COBOL-WORDS RESERVE: %s may appear but once", name);
+        error_msg(loc, "COBOL-WORDS RESERVE: %qs may appear but once", name);
         return false;
       }
-      tokens[lname] = -42;
+      cdf::any_cobol_words = true;
+      tokens[lname] = reserved_e;
       return true;
     }
-    int redefined_as( const cbl_name_t name ) {
+    /*
+     * name may be:
+     * 1.  just a name, return the input token.
+     * 2.  reserved with -42 token
+     * 3.  a user-defined substitute or alias for a token
+     *
+     * Also the user might have removed the name.  In that case, the generated
+     * lexer (being unaware of the deletion, found it and returned the token
+     * value.  If it is in the undefined list, return 0.
+     */
+    int redefined_as( const cbl_name_t name, int token ) {
+      if( 1 == undefined.count(token) ) return undefined_e;
+      if( ! name ) return token;
+
       auto lname( lowercase(name) );
       if( cobol_words.find(lname) != cobol_words.end() ) {
         auto p = tokens.find(lname);
         if( p != tokens.end() ) {
-          return p->second;
+          return p->second;   // found a token for name
         }
       }
-      return 0;
+      return token;
     }
     const char * name_of( int tok ) const {
       tok -= (255 + 3);
@@ -3069,43 +3137,49 @@ class current_tokens_t {
 
   tokenset_t tokens;
  public:
+  bool static is_reserved( int token )  { return token == tokenset_t::reserved_e; }
+  bool static is_undefined( int token ) { return token == tokenset_t::undefined_e; }
+
   current_tokens_t() {}
   int find( const cbl_name_t name, bool include_intrinsics ) {
     return tokens.find(name, include_intrinsics);
   }
   bool equate( const cbl_loc_t& loc, const cbl_name_t keyword, const cbl_name_t alias ) {
-    int token; 
-    if( 0 == (token = binary_integer_usage_of(keyword)) ) {
-      if( 0 == (token = keyword_tok(keyword)) ) {
-	error_msg(loc, "EQUATE %s: not a valid token", keyword);
+    int token;
+
+    if( 0 == (token = keyword_tok(keyword, true)) ) {
+      if( 0 == (token = binary_integer_usage_of(keyword)) ) {
+	error_msg(loc, "EQUATE: not a reserved word: %qs", keyword);
 	return false;
       }
     }
-    auto name = keyword_alias_add(tokens.uppercase(keyword),
-				  tokens.uppercase(alias));
-    if( name != keyword ) {
-      error_msg(loc, "EQUATE: %s is already an alias for %s", alias, name.c_str());
+    auto result = keyword_alias_add(tokens.uppercase(keyword),
+                                    tokens.uppercase(alias));
+    if( ! result.second ) {
+      error_msg(loc, "EQUATE: %qs is already an alias for %qs",
+                alias, result.first.c_str());
       return false;
-    } 
+    }
     return tokens.equate(loc, token, alias);
   }
-  bool undefine( const cbl_loc_t& loc, cbl_name_t keyword ) {
+  bool undefine( const cbl_loc_t& loc, const cbl_name_t keyword ) {
     return tokens.undefine(loc, keyword);
   }
   bool substitute( const cbl_loc_t& loc, const cbl_name_t keyword, const cbl_name_t alias ) {
-    int token; 
-    if( 0 == (token = binary_integer_usage_of(keyword)) ) {
-      if( 0 == (token = keyword_tok(keyword)) ) {
-	error_msg(loc, "SUBSTITUTE %s: not a valid token", keyword);
+    int token;
+    if( 0 == (token = keyword_tok(keyword, true)) ) {
+      if( 0 == (token = binary_integer_usage_of(keyword)) ) {
+	error_msg(loc, "SUBSTITUTE: not a reserved word: %qs", keyword);
 	return false;
       }
     }
-    auto name = keyword_alias_add(tokens.uppercase(keyword),
-				  tokens.uppercase(alias));
-    if( name != keyword ) {
-      error_msg(loc, "SUBSTITUTE: %s is already an alias for %s", alias, name.c_str());
+    auto result = keyword_alias_add(tokens.uppercase(keyword),
+                                    tokens.uppercase(alias));
+    if( ! result.second ) {
+      error_msg(loc, "SUBSTITUTE: %qs is already an alias for %qs",
+                alias, result.first.c_str());
       return false;
-    } 
+    }
 
     dbgmsg("%s:%d: %s (%d) will have alias %s", __func__, __LINE__, keyword, token, alias);
     return tokens.substitute(loc, keyword, token, alias);
@@ -3113,8 +3187,8 @@ class current_tokens_t {
   bool reserve( const cbl_loc_t& loc, const cbl_name_t name ) {
     return tokens.reserve(loc, name);
   }
-  int redefined_as( const cbl_name_t name ) {
-    return tokens.redefined_as(name);
+  int redefined_as( const cbl_name_t name, int token ) {
+    return tokens.redefined_as(name, token);
   }
   const char * name_of( int tok ) const {
     return tokens.name_of(tok);
@@ -3219,8 +3293,12 @@ bool validate_numeric_edited(cbl_field_t *field);
 cbl_field_t *new_alphanumeric(const cbl_name_t name=nullptr,
                               cbl_encoding_t encoding=no_encoding_e );
 
+char *expand_picture(const char *picture);
+void expand_expanded(char *picture);
+
 // ENABLE_HIJACKING allows for code generation to be "hijacked" when the
 // program-id is "dubner_h" or "hijack_h".  See the mainline code in genapi.cc.
+
 
 #define ENABLE_HIJACKING
 

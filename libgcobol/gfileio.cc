@@ -50,6 +50,7 @@
 #include "io.h"
 #include "common-defs.h"
 #include "gcobolio.h"
+#include "cobol-endian.h"
 #include "libgcobol.h"
 #include "gfileio.h"
 #include "charmaps.h"
@@ -359,7 +360,7 @@ __gg__file_init(
   {
   if( !(file->flags & file_flag_initialized_e) )
     {
-    charmap_t *charmap = __gg__get_charmap(encoding);
+    const charmap_t *charmap = __gg__get_charmap(encoding);
 
     file->name                = strdup(name);
     file->symbol_table_index  = symbol_table_index;
@@ -385,7 +386,6 @@ __gg__file_init(
     file->access              = (cbl_file_access_t)access ;
     file->errnum              = 0 ;
     file->io_status           = FsSuccess ;
-    file->delimiter           = charmap->mapped_character(ascii_newline) ;
     file->stride              = charmap->stride();
     file->flags               = file_flag_none_e;
         file->flags          |= (optional ? file_flag_optional_e : file_flag_none_e)
@@ -396,6 +396,18 @@ __gg__file_init(
     file->prior_op            = file_op_none;
     file->encoding            = encoding;
     file->alphabet            = alphabet;
+
+    // Note: eventually the delimiter needs to be a variable; it can be set
+    // by the programmer.
+    size_t nbytes;
+    const char ch = ascii_newline;
+    const char *delim = __gg__iconverter(DEFAULT_SOURCE_ENCODING,
+                                         file->encoding,
+                                         &ch,
+                                         1,
+                                         &nbytes);
+    memset(&file->delimiter, 0, 4);
+    memcpy(&file->delimiter, delim, file->stride);
 
     if( file->access == file_inaccessible_e )
       {
@@ -701,6 +713,7 @@ relative_file_delete(cblc_file_t *file, bool is_random)
   file->io_status = FsErrno;
 
   cbl_char_t record_marker;
+  uint8_t record_marker_ch;
 
   unsigned char *stash = static_cast<unsigned char *>(malloc(file->default_record->capacity));
   massert(stash);
@@ -746,8 +759,9 @@ relative_file_delete(cblc_file_t *file, bool is_random)
     record_marker = 0x00;
     errno = 0;
     file->errnum = 0;
+    record_marker_ch = record_marker;
     if( pwrite( rfp.fd,
-                &record_marker,
+                &record_marker_ch,
                 1,
                 file->prior_read_location
                       + rfp.record_size - 1 ) == -1 )
@@ -765,18 +779,19 @@ relative_file_delete(cblc_file_t *file, bool is_random)
 
     errno = 0;
     file->errnum = 0;
-    record_marker = 0;
-    ssize_t presult = pread(rfp.fd, &record_marker, 1, rfp.flag_position);
+    ssize_t presult = pread(rfp.fd, &record_marker_ch, 1, rfp.flag_position);
     if( presult < 0 )
       {
+      record_marker = record_marker_ch;
       handle_errno(file, __func__, "pread() error");
       goto done;
       }
-
-    charmap_t *charmap = __gg__get_charmap(file->encoding);
-
+    record_marker = record_marker_ch;
+    const charmap_t *charmap = __gg__get_charmap(file->encoding);
+    uint8_t newline =
+                   charmap->is_like_ebcdic() ? ebcdic_newline : ascii_newline;
     if(    presult == 0
-        || record_marker != charmap->mapped_character(ascii_newline) )
+        || record_marker_ch != newline )
       {
       // There isn't a record there for us to delete, which is an error
       file->io_status = FsNotFound;   // "23"
@@ -787,7 +802,8 @@ relative_file_delete(cblc_file_t *file, bool is_random)
     record_marker = 0x00;
     errno = 0;
     file->errnum = 0;
-    if( pwrite(rfp.fd, &record_marker, 1, rfp.flag_position) == -1 )
+    record_marker_ch = record_marker;
+    if( pwrite(rfp.fd, &record_marker_ch, 1, rfp.flag_position) == -1 )
       {
       file->errnum = errno;
       handle_ferror(file, __func__, "pwrite() error");
@@ -1549,9 +1565,8 @@ relative_file_start(cblc_file_t *file,
   while(      rfp.record_position >= 0
           &&  rfp.record_position+total_record_length <= rfp.file_size )
     {
-    cbl_char_t record_marker;
-    record_marker = 0;
-    ssize_t presult = pread(rfp.fd, &record_marker, 1, rfp.flag_position);
+    uint8_t record_marker_ch;
+    ssize_t presult = pread(rfp.fd, &record_marker_ch, 1, rfp.flag_position);
     if( presult < 0 )
       {
       handle_errno(file, __func__, "pread() error");
@@ -1562,8 +1577,10 @@ relative_file_start(cblc_file_t *file,
       // end of file
       goto done;
       }
-    charmap_t *charmap = __gg__get_charmap(file->encoding);
-    if( record_marker == charmap->mapped_character(ascii_newline) )
+    const charmap_t *charmap = __gg__get_charmap(file->encoding);
+    uint8_t newline =
+                   charmap->is_like_ebcdic() ? ebcdic_newline : ascii_newline;
+    if( record_marker_ch == newline )
       {
       // The record is a valid one
       fpos = rfp.record_position;
@@ -1998,7 +2015,6 @@ relative_file_rewrite( cblc_file_t *file, size_t length, bool is_random )
     {
     // This is like a write, except the place we are putting
     // it has to be occupied instead of empty.
-    cbl_char_t record_marker;
     if( relative_file_parameters_get(   rfp,
                                         rfm_microfocus_e,
                                         file,
@@ -2009,16 +2025,18 @@ relative_file_rewrite( cblc_file_t *file, size_t length, bool is_random )
       goto done;
       }
 
-    record_marker = 0;
-    ssize_t presult = pread(rfp.fd, &record_marker, 1, rfp.flag_position);
+    uint8_t record_marker_ch;
+    ssize_t presult = pread(rfp.fd, &record_marker_ch, 1, rfp.flag_position);
     if( presult < 0 )
       {
       handle_errno(file, __func__, "pread() error");
       goto done;
       }
 
-    charmap_t *charmap = __gg__get_charmap(file->encoding);
-    if( presult == 0 || record_marker != charmap->mapped_character(ascii_newline) )
+    const charmap_t *charmap = __gg__get_charmap(file->encoding);
+    uint8_t newline =
+                   charmap->is_like_ebcdic() ? ebcdic_newline : ascii_newline;
+    if( presult == 0 || record_marker_ch != newline )
       {
       // The record is not specified:
       file->io_status = FsNotFound;   // "23"
@@ -2511,15 +2529,28 @@ relative_file_write(cblc_file_t    *file,
     return relative_file_write_varying(file, location, length, is_random);
     }
 
+  // relative files have fixed record sizes, which end with a hardcoded ASCII
+  // CR-LF.
+
+
   file->errnum = 0;
   file->io_status = FsErrno;
 
   long necessary_file_size;
   charmap_t *charmap = __gg__get_charmap(file->encoding);
+  char ach_space[4];
+  charmap->get_byte_string(ach_space, ascii_space);
+  int stride = charmap->stride();
+
+  uint8_t carriage_return =
+                   charmap->is_like_ebcdic() ? ebcdic_return : ascii_return;
+
+  unsigned char newline =
+                   charmap->is_like_ebcdic() ? ebcdic_newline : ascii_newline;
   const unsigned char achPostamble[] =
     {
-    (unsigned char)charmap->mapped_character(ascii_cr),
-    (unsigned char)charmap->mapped_character(ascii_newline)
+    carriage_return,
+    newline
     };
 
   relative_file_parameters rfp;
@@ -2560,16 +2591,15 @@ relative_file_write(cblc_file_t    *file,
         }
       }
     // Let's check to make sure the slot for this record is currently available:
-    cbl_char_t record_marker;
-    record_marker = 0;
-    ssize_t presult = pread(rfp.fd, &record_marker, 1, rfp.flag_position);
+    uint8_t record_marker_ch;
+    ssize_t presult = pread(rfp.fd, &record_marker_ch, 1, rfp.flag_position);
     if( presult < 0 )
       {
       handle_errno(file, __func__, "pread() error");
       goto done;
       }
 
-    if( presult == 1 && record_marker == charmap->mapped_character(ascii_newline) )
+    if( presult == 1 && record_marker_ch == newline )
       {
       // The slot has something in it already:
       file->io_status = FsDupWrite;   // "22"
@@ -2609,9 +2639,17 @@ relative_file_write(cblc_file_t    *file,
   if( file->record_area_max > length )
     {
     size_t padding = file->record_area_max - length;
+    while(padding)
+      {
+      fwrite(ach_space, stride, 1, file->file_pointer);
+      padding -= stride;
+      }
     while(padding--)
       {
-      fputc(charmap->mapped_character(ascii_space), file->file_pointer);
+      // This probably shouldn't happen.  It means that the file record area
+      // size wasn't a multiple of the stride.  <shrug>  That's the COBOL
+      // programmer's problem.
+      fputc(0, file->file_pointer);
       }
     }
 
@@ -2639,6 +2677,20 @@ done:
   }
 
 static void
+write_a_char(cblc_file_t *file, cbl_char_t ch)
+  {
+  size_t nbytes;
+  // Whether big- or little-endian, this will give us the character we want
+  unsigned char uch = ch % 256;
+  const char *converted = __gg__iconverter(DEFAULT_SOURCE_ENCODING,
+                                           file->encoding,
+                                           &uch,
+                                           1,
+                                           &nbytes);
+  fwrite(converted, nbytes, 1, file->file_pointer);
+  }
+
+static void
 sequential_file_write(cblc_file_t    *file,
                 const unsigned char  *location,
                       size_t          length,
@@ -2649,8 +2701,8 @@ sequential_file_write(cblc_file_t    *file,
   charmap_t *charmap = __gg__get_charmap(file->encoding);
   int stride = charmap->stride();
 
-  // ch is the vertical control character
-  cbl_char_t ch = '\0';
+  // chvert is the vertical control character
+  uint8_t chvert = '\0';
   size_t bytes_to_write;
 
   int lcount;
@@ -2658,7 +2710,7 @@ sequential_file_write(cblc_file_t    *file,
   if( lines < -1 )
     {
     // We are using -666 for a form feed
-    ch = charmap->mapped_character(ascii_ff);  // Form feed
+    chvert = ascii_ff;
     lcount = 1;
     }
   else if( lines == -1 )
@@ -2669,12 +2721,12 @@ sequential_file_write(cblc_file_t    *file,
   else if( lines == 0 )
     {
     lcount = 1;
-    ch = charmap->mapped_character(ascii_return);
+    chvert = ascii_newline;
     }
   else /* if( lines > 0 ) */
     {
     lcount = lines;
-    ch = charmap->mapped_character(ascii_newline);
+    chvert = ascii_newline;
     }
 
   // By default, we write out the number of characters in the record area
@@ -2691,7 +2743,7 @@ sequential_file_write(cblc_file_t    *file,
 
   if( file->org == file_line_sequential_e )
     {
-    // If file-sequential, then trailing spaces are removed:
+    // If line-sequential, then trailing spaces are removed:
     while(bytes_to_write > 0
            && charmap->getch(location, bytes_to_write-stride)
                                   == charmap->mapped_character(ascii_space) )
@@ -2700,15 +2752,16 @@ sequential_file_write(cblc_file_t    *file,
       }
     }
 
-  if( after && file->org == file_line_sequential_e
-                           && ch == charmap->mapped_character(ascii_newline) )
+  if(    after
+      && file->org == file_line_sequential_e
+      && chvert == ascii_newline )
     {
     // In general, we terminate every line with a newline.  Because this
     // line is supposed to start with a newline, we decrement the line
     // counter by one if we had already sent one.
-    if( lcount &&
-            (   file->recent_char == charmap->mapped_character(ascii_newline)
-                || file->recent_char == charmap->mapped_character(ascii_ff)) )
+    if(    lcount
+        && (   file->recent_char == charmap->mapped_character(ascii_newline)
+            || file->recent_char == charmap->mapped_character(ascii_ff)) )
       {
       lcount -= 1;
       }
@@ -2716,20 +2769,20 @@ sequential_file_write(cblc_file_t    *file,
 
   if( after )
     {
+    // We send out any vertical control character here, because the content
+    // comes AFTER the vertical control
+
     while(lcount--)
       {
-      fwrite( &ch,
-              stride,
-              1,
-              file->file_pointer);
-      if( handle_ferror(file, __func__, "fputc() error [3]") )
+      write_a_char(file, chvert);
+      if( handle_ferror(file, __func__, "fwrite() error") )
         {
         goto done;
         }
-      file->recent_char = ch;
+      file->recent_char = charmap->mapped_character(chvert);
       }
     // That might have been a formfeed; switch back to newline:
-    ch = charmap->mapped_character(ascii_newline);
+    chvert = ascii_newline;
     }
 
   switch(file->org)
@@ -2809,15 +2862,12 @@ sequential_file_write(cblc_file_t    *file,
     {
     // Special case:  when AFTER NON-ZERO lines, we stick a newline on the
     // end of this record:
-    fwrite( &ch,
-            stride,
-            1,
-            file->file_pointer);
-    if( handle_ferror(file, __func__, "fputc() error [4]") )
+    write_a_char(file, chvert);
+    if( handle_ferror(file, __func__, "fwrite() error [4]") )
       {
       goto done;
       }
-    file->recent_char = charmap->mapped_character(ascii_newline);
+    file->recent_char = charmap->mapped_character(chvert);
     }
 
   if( !after  )
@@ -2825,15 +2875,12 @@ sequential_file_write(cblc_file_t    *file,
     // We did the output BEFORE, so now it's time to send some newlines
     while(lcount--)
       {
-      fwrite( &ch,
-              stride,
-              1,
-              file->file_pointer);
-      if( handle_ferror(file, __func__, "fputc() error [5]") )
+      write_a_char(file, chvert);
+      if( handle_ferror(file, __func__, "fwrite() error [5]") )
         {
         goto done;
         }
-      file->recent_char = ch;
+      file->recent_char = charmap->mapped_character(chvert);
       }
     }
 
@@ -3153,8 +3200,9 @@ line_sequential_file_read_sbc(cblc_file_t *file, char space)
       }
     // Much hinges on where the next newline is to be found:
     pstart = file->buffer+file->buffer_pos;
+    char ch = reinterpret_cast<const char *>(&file->delimiter)[0];
     pnewline = reinterpret_cast<const char *>(memchr(pstart,
-                      static_cast<char>(file->delimiter),
+                      ch,
                       file->buffer_len - file->buffer_pos));
     if( file->buffer_pos >= file->buffer_len )
       {
@@ -3279,8 +3327,9 @@ line_sequential_file_read_sbc(cblc_file_t *file, char space)
           }
         }
       pstart = file->buffer+file->buffer_pos;
+      char ch = reinterpret_cast<const char *>(&file->delimiter)[0];
       pnewline = reinterpret_cast<const char *>(memchr(pstart,
-                        static_cast<char>(file->delimiter),
+                        ch,
                         file->buffer_len - file->buffer_pos));
       if( pnewline )
         {
@@ -3346,7 +3395,7 @@ line_sequential_file_read(  cblc_file_t *file)
   // it makes more sense to me.
 
   // We first stage the data into the record area.
-  cbl_char_t ch;
+  uint8_t ch[4];
 
   long fpos = static_cast<long>(file->file_fpos);
 
@@ -3393,11 +3442,10 @@ line_sequential_file_read(  cblc_file_t *file)
 
     // There are still characters in the file->buffer, and we are still looking
     // to fill the record_area, and we are still looking for a end-of-line.
-    ch = 0;
-    memcpy(&ch, file->buffer+file->buffer_pos, stride);
+    memcpy(ch, file->buffer+file->buffer_pos, stride);
     file->buffer_pos += stride;
     file->file_fpos += stride;
-    if( ch == file->delimiter )
+    if( memcmp(ch, &file->delimiter, stride) == 0)
       {
       break;
       }
@@ -3451,13 +3499,12 @@ line_sequential_file_read(  cblc_file_t *file)
           goto done;
           }
         }
-      ch = 0;
-      memcpy(&ch, file->buffer+file->buffer_pos, stride);
+      memcpy(ch, file->buffer+file->buffer_pos, stride);
       file->buffer_pos += stride;
       file->file_fpos += stride;
       // We can't use handle_ferror() directly, because an EOF is
       // a legitimate way to end the last line.
-      if( ch == file->delimiter )
+    if( memcmp(ch, &file->delimiter, stride) == 0 )
         {
         clearerr(file->file_pointer);
         break;
@@ -3810,6 +3857,10 @@ relative_file_read( cblc_file_t *file,
     return relative_file_read_varying(file, where);
     }
 
+  const charmap_t *charmap = __gg__get_charmap(file->encoding);
+  unsigned char newline_ch =
+                   charmap->is_like_ebcdic() ? ebcdic_newline : ascii_newline;
+
   bool is_random = where > 0;
 
   file->errnum = 0;
@@ -3877,14 +3928,12 @@ relative_file_read( cblc_file_t *file,
       file->prior_read_location = -1;
       goto done;
       }
-    cbl_char_t record_marker;
-    record_marker = 0;
-    if( pread(rfp.fd, &record_marker, 1, rfp.flag_position) <= 0)
+    uint8_t record_marker_ch;
+    if( pread(rfp.fd, &record_marker_ch, 1, rfp.flag_position) <= 0)
       {
       goto done;
       }
-    charmap_t *charmap = __gg__get_charmap(file->encoding);
-    if(record_marker == charmap->mapped_character(ascii_newline) )
+    if(record_marker_ch == newline_ch )
       {
       // We have a good record to read:
 

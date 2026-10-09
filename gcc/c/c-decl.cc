@@ -5537,15 +5537,15 @@ one_element_array_type_p (const_tree type)
 }
 
 /* Determine whether TYPE is a zero-length array type "[0]".  */
-static bool
+bool
 zero_length_array_type_p (const_tree type)
 {
-  if (TREE_CODE (type) == ARRAY_TYPE)
-    if (tree type_size = TYPE_SIZE_UNIT (type))
-      if ((integer_zerop (type_size))
-	   && TYPE_DOMAIN (type) != NULL_TREE
-	   && TYPE_MAX_VALUE (TYPE_DOMAIN (type)) == NULL_TREE)
-	return true;
+  if (TREE_CODE (type) == ARRAY_TYPE
+      && COMPLETE_TYPE_P (type)
+      && TYPE_DOMAIN (type) != NULL_TREE
+      && (TYPE_MAX_VALUE (TYPE_DOMAIN (type)) == NULL_TREE
+	  || integer_all_onesp (TYPE_MAX_VALUE (TYPE_DOMAIN (type)))))
+    return true;
   return false;
 }
 
@@ -5564,7 +5564,7 @@ add_flexible_array_elts_to_size (tree decl, tree init)
 
   elt = CONSTRUCTOR_ELTS (init)->last ().value;
   type = TREE_TYPE (elt);
-  if (c_flexible_array_member_type_p (type))
+  if (flexible_array_member_type_p (type))
     {
       complete_array_type (&type, elt, false);
       /* For a structure, add the size of the initializer to the DECL's
@@ -7315,6 +7315,8 @@ grokdeclarator (const struct c_declarator *declarator,
 
 	    declarator = declarator->declarator;
 
+	    bool flexible_array_member = false;
+
 	    /* Check for some types that there cannot be arrays of.  */
 
 	    if (VOID_TYPE_P (type))
@@ -7527,7 +7529,6 @@ grokdeclarator (const struct c_declarator *declarator,
 	      }
 	    else if (decl_context == FIELD)
 	      {
-		bool flexible_array_member = false;
 		if (array_parm_vla_unspec_p)
 		  /* Field names can in fact have function prototype
 		     scope so [*] is disallowed here through making
@@ -7587,8 +7588,16 @@ grokdeclarator (const struct c_declarator *declarator,
 						 ENCODE_QUAL_ADDR_SPACE (as));
 		if (array_parm_vla_unspec_p)
 		  type = c_build_array_type_unspecified (type);
+		/* The GCC extension for zero-length arrays differs from
+		   ISO flexible array members in that sizeof yields
+		   zero.  */
+		else if (size && integer_zerop (size))
+		  type = c_build_array_type_zero_size (type);
 		else
 		  type = c_build_array_type (type, itype);
+
+		if (!valid_array_size_p (loc, type, name))
+		  type = error_mark_node;
 	      }
 
 	    if (array_parm_vla_unspec_p)
@@ -7607,23 +7616,10 @@ grokdeclarator (const struct c_declarator *declarator,
 		size_varies = true;
 	      }
 
-	    if (type != error_mark_node)
-	      {
-		/* The GCC extension for zero-length arrays differs from
-		   ISO flexible array members in that sizeof yields
-		   zero.  */
-		if (size && integer_zerop (size))
-		  {
-		    gcc_assert (itype);
-		    type = build_distinct_type_copy (TYPE_MAIN_VARIANT (type));
-		    TYPE_SIZE (type) = bitsize_zero_node;
-		    TYPE_SIZE_UNIT (type) = size_zero_node;
-		    SET_TYPE_STRUCTURAL_EQUALITY (type);
-		  }
 
-		if (!valid_array_size_p (loc, type, name))
-		  type = error_mark_node;
-	      }
+	    gcc_assert (type == error_mark_node
+			|| flexible_array_member
+			   == flexible_array_member_type_p (type));
 
 	    if (decl_context != PARM
 		&& (array_ptr_quals != TYPE_UNQUALIFIED
@@ -9413,7 +9409,7 @@ is_flexible_array_member_p (bool is_last_field,
 
   bool is_zero_length_array = zero_length_array_type_p (TREE_TYPE (x));
   bool is_one_element_array = one_element_array_type_p (TREE_TYPE (x));
-  bool is_flexible_array = c_flexible_array_member_type_p (TREE_TYPE (x));
+  bool is_flexible_array = flexible_array_member_type_p (TREE_TYPE (x));
 
   unsigned int strict_flex_array_level = c_strict_flex_array_level_of (x);
 
@@ -9539,7 +9535,7 @@ verify_counted_by_attribute (tree outmost_struct_type,
   for (tree field = TYPE_FIELDS (cur_struct_type); field;
        field = TREE_CHAIN (field))
     {
-      if (c_flexible_array_member_type_p (TREE_TYPE (field))
+      if (flexible_array_member_type_p (TREE_TYPE (field))
 	   || TREE_CODE (TREE_TYPE (field)) == POINTER_TYPE)
 	{
 	  tree attr_counted_by = lookup_attribute ("counted_by",
@@ -9742,7 +9738,7 @@ finish_struct (location_t loc, tree t, tree fieldlist, tree attributes,
 	DECL_PACKED (x) = 1;
 
       /* Detect flexible array member in an invalid context.  */
-      if (c_flexible_array_member_type_p (TREE_TYPE (x)))
+      if (flexible_array_member_type_p (TREE_TYPE (x)))
 	{
 	  if (TREE_CODE (t) == UNION_TYPE)
 	    pedwarn (DECL_SOURCE_LOCATION (x), OPT_Wpedantic,
@@ -9789,7 +9785,7 @@ finish_struct (location_t loc, tree t, tree fieldlist, tree attributes,
 	 the result for multiple last_fields.  */
       if (TREE_CODE (TREE_TYPE (x)) == ARRAY_TYPE)
 	TYPE_INCLUDES_FLEXARRAY (t)
-	  |= is_last_field && c_flexible_array_member_type_p (TREE_TYPE (x));
+	  |= is_last_field && flexible_array_member_type_p (TREE_TYPE (x));
       /* Recursively set TYPE_INCLUDES_FLEXARRAY for the context of x, t
 	 when x is an union or record and is the last field.  */
       else if (RECORD_OR_UNION_TYPE_P (TREE_TYPE (x)))
@@ -11938,6 +11934,8 @@ names_builtin_p (const char *name)
   switch (C_RID_CODE (id))
     {
     case RID_BUILTIN_ASSOC_BARRIER:
+    case RID_BUILTIN_BITREVERSEG:
+    case RID_BUILTIN_BSWAPG:
     case RID_BUILTIN_CONVERTVECTOR:
     case RID_BUILTIN_HAS_ATTRIBUTE:
     case RID_BUILTIN_SHUFFLE:

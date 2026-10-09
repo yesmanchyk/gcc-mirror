@@ -3,6 +3,7 @@
 // { dg-require-cstdint "" }
 
 #include <random>
+#include <cfloat>
 #include <sstream>
 #include <testsuite_hooks.h>
 
@@ -38,7 +39,7 @@ test_default()
       "1 0.00000000000000000e+00 1.00000000000000000e+00 1.00000000000000000e+00";
     VERIFY( res == expected );
     break;
-  case 64: // ieee80 
+  case 64: // ieee80
     expected =
       "1 0.000000000000000000000e+00 1.000000000000000000000e+00 1.000000000000000000000e+00";
     VERIFY( res == expected );
@@ -74,19 +75,19 @@ test_custom()
   case 24: // ieee32
     expected =
       "3 0.000000000e+00 3.333333433e-01 6.666666865e-01 1.000000000e+00"
-	" 7.777777281e-01 9.999999702e-01 1.222222322e+00";
+       " 7.777777314e-01 1.000000000e+00 1.222222328e+00";
     VERIFY( res == expected );
     break;
   case 53: // ieee64
     expected =
       "3 0.00000000000000000e+00 3.33333333333333315e-01 6.66666666666666630e-01 1.00000000000000000e+00"
-	" 7.77777777777777901e-01 1.00000000000000000e+00 1.22222222222222210e+00";
+       " 7.77777777777777901e-01 1.00000000000000000e+00 1.22222222222222210e+00";
     VERIFY( res == expected );
     break;
-  case 64: // ieee80 
+  case 64: // ieee80
     expected =
       "3 0.000000000000000000000e+00 3.333333333333333333424e-01 6.666666666666666666847e-01 1.000000000000000000000e+00"
-	" 7.777777777777779011359e-01 1.000000000000000000000e+00 1.222222222222222098864e+00";
+       " 7.777777777777779011359e-01 1.000000000000000000000e+00 1.222222222222222098864e+00";
     VERIFY( res == expected );
     break;
   default:
@@ -100,10 +101,14 @@ int main()
   test_default<double>();
   test_default<long double>();
 
-#ifdef __x86_64__
+#if FLT_EVAL_METHOD >= 0
+# if FLT_EVAL_METHOD == 0
   test_custom<float>();
-#endif
+# endif
+# if FLT_EVAL_METHOD != 2
   test_custom<double>();
+# endif
   test_custom<long double>();
+#endif
   return 0;
 }

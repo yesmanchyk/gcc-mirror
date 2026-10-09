@@ -30,6 +30,7 @@
 #include "rust-finalize-imports-2.0.h"
 #include "rust-attribute-values.h"
 #include "rust-identifier-path.h"
+#include "rust-session-manager.h"
 
 namespace Rust {
 namespace Resolver2_0 {
@@ -98,14 +99,15 @@ Early::resolve_glob_import (NodeId use_dec_id, TopLevel::ImportKind &&glob)
   if (!result)
     return false;
 
+  auto &imports = import_mappings.new_or_access (use_dec_id);
+
   // here, we insert the module's NodeId into the import_mappings and will look
   // up the module proper in `FinalizeImports`
   // The namespace does not matter here since we are dealing with a glob
   // FIXME: Does the namespace not matter? Is that valid?
   // TODO: Ugly
-  import_mappings.insert (use_dec_id,
-			  ImportPair (std::move (glob),
-				      ImportData::Glob (resolved->definition)));
+  imports.emplace_back (
+    ImportPair (std::move (glob), ImportData::Glob (resolved->definition)));
 
   return true;
 }
@@ -142,22 +144,8 @@ Early::resolve_rebind_import (NodeId use_dec_id,
       import_id = rebind.get_node_id ();
       break;
     case AST::UseTreeRebind::NewBindType::NONE:
-      {
-	const auto &segments = path.get_segments ();
-	// We don't want to insert `self` with `use module::self`
-	if (path.get_final_segment ().is_lower_self_seg ())
-	  {
-	    // Erroneous `self` or `{self}` use declaration
-	    if (segments.size () == 1)
-	      break;
-	    import_id = segments[segments.size () - 2].get_node_id ();
-	  }
-	else
-	  {
-	    import_id = path.get_final_segment ().get_node_id ();
-	  }
-	break;
-      }
+      import_id = path.get_final_segment ().get_node_id ();
+      break;
     case AST::UseTreeRebind::NewBindType::WILDCARD:
       // nothing
       break;
@@ -312,14 +300,35 @@ Early::visit (AST::Module &module)
 }
 
 void
+Early::maybe_prelude_import ()
+{
+  // handle prelude import
+  if (ctx.prelude)
+    {
+      auto container = Analysis::Mappings::get ().lookup_glob_container (
+	ctx.prelude.value ());
+      rust_assert (container);
+
+      GlobbingVisitor glob_visit (ctx);
+      glob_visit.go (container.value ());
+      dirty |= glob_visit.is_dirty ();
+    }
+}
+
+void
 Early::visit (AST::MacroInvocation &invoc)
 {
   auto &path = invoc.get_invoc_data ().get_path ();
 
   // We special case the `offset_of!()` macro if the flag is here, otherwise
   // we accept whatever `offset_of!()` definition we resolved to.
-  auto resolve_offset_of
-    = flag_assume_builtin_offset_of && (path.as_string () == "offset_of");
+  auto resolve_offset_of = Session::get_instance ().should_support_offset_of ()
+			   && (path.as_string () == "offset_of");
+
+  // Ditto, but for `cfg_select!()`.
+  auto resolve_cfg_select
+    = Session::get_instance ().should_support_cfg_select ()
+      && (path.as_string () == "cfg_select");
 
   if (invoc.get_kind () == AST::MacroInvocation::InvocKind::Builtin)
     for (auto &pending_invoc : invoc.get_pending_eager_invocations ())
@@ -348,10 +357,10 @@ Early::visit (AST::MacroInvocation &invoc)
     ns_def = ctx.resolve_path (path, Namespace::Macros);
 
   // if the definition still does not have a value, then it's an error - unless
-  // we should automatically resolve offset_of!() calls
+  // we should automatically resolve offset_of!() or cfg_select!() calls
   if (!ns_def.has_value ())
     {
-      if (!resolve_offset_of)
+      if (!resolve_offset_of && !resolve_cfg_select)
 	collect_error (Error (invoc.get_locus (), ErrorCode::E0433,
 			      "could not resolve macro invocation %qs",
 			      path.as_string ().c_str ()));
@@ -431,17 +440,21 @@ Early::visit (AST::Attribute &attr)
   auto &mappings = Analysis::Mappings::get ();
 
   auto name = attr.get_path ().get_segments ().at (0).get_segment_name ();
-  auto is_not_builtin = [&name] (AST::Attribute &attr) {
-    return Analysis::BuiltinAttributeMappings::get ()
-      ->lookup_builtin (name)
-      .is_error ();
-  };
+  auto known_check = Analysis::Attributes::is_known (name);
+
+  // If it is a tool attribute, the compiler can ignore it and let the tool
+  // handle it
+  if (known_check == Analysis::Attributes::AttributeKnowledge::Tool)
+    return;
+
+  auto is_builtin
+    = known_check == Analysis::Attributes::AttributeKnowledge::Known;
 
   if (attr.is_derive ())
     {
       visit_derive_attribute (attr, mappings);
     }
-  else if (is_not_builtin (attr)) // Do not resolve builtins
+  else if (!is_builtin) // Do not resolve builtins
     {
       visit_non_builtin_attribute (attr, mappings, name);
     }
@@ -487,10 +500,16 @@ Early::finalize_glob_import (NameResolutionContext &ctx,
       rust_assert (container.value ()->get_glob_container_kind ()
 		   == AST::GlobContainer::Kind::Module);
 
+      // TODO: catch multiple attempted prelude imports
+      if (!ctx.prelude)
+	dirty = true;
+
       ctx.prelude = mapping.data.container ().get_node_id ();
     }
 
-  GlobbingVisitor (ctx).go (container.value ());
+  GlobbingVisitor glob_visit (ctx);
+  glob_visit.go (container.value ());
+  dirty |= glob_visit.is_dirty ();
 }
 
 void
@@ -521,8 +540,11 @@ Early::finalize_rebind_import (const Early::ImportPair &mapping)
 	    // Erroneous `self` or `{self}` use declaration
 	    if (segments.size () == 1)
 	      return;
-	    declared_name = segments[segments.size () - 2].as_string ();
-	    import_id = segments[segments.size () - 2].get_node_id ();
+
+	    auto pre_self_segment = segments.rbegin () + 1;
+
+	    declared_name = pre_self_segment->as_string ();
+	    import_id = pre_self_segment->get_node_id ();
 	  }
 	else
 	  {
@@ -572,8 +594,12 @@ Early::visit (AST::UseDeclaration &decl)
       if (rebind.get_path ().get_final_segment ().is_lower_self_seg ())
 	{
 	  collect_error (
-	    Error (decl.get_locus (), ErrorCode::E0429,
+	    Error (rebind.get_path ().get_final_segment ().get_locus (),
+		   ErrorCode::E0429,
 		   "%<self%> imports are only allowed within a { } list"));
+	  // We must not continue, malformed use declaration must not be
+	  // finalized.
+	  return;
 	}
     }
 

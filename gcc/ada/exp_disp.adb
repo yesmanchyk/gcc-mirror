@@ -1203,7 +1203,9 @@ package body Exp_Disp is
          Set_SCIL_Node (SCIL_Related_Node, SCIL_Node);
       end if;
 
-      Analyze_And_Resolve (Call_Node, Call_Typ);
+      --  Suppress null access checks during the analysis of the expanded code
+
+      Analyze_And_Resolve (Call_Node, Call_Typ, Suppress => Access_Check);
 
       Set_Is_Expanded_Dispatching_Call (Call_Node);
    end Expand_Dispatching_Call;
@@ -5062,7 +5064,7 @@ package body Exp_Disp is
 
       --   TSD : Type_Specific_Data (I_Depth) :=
       --           (Idepth             => I_Depth,
-      --            Access_Level       => Type_Access_Level (Typ),
+      --            Access_Level       => Dynamic_Type_Access_Level (Typ),
       --            Alignment          => Typ'Alignment,
       --            Expanded_Name      => Cstring_Ptr!(Exname'Address))
       --            External_Tag       => Cstring_Ptr!(Exname'Address))
@@ -5109,8 +5111,7 @@ package body Exp_Disp is
 
       --  Access_Level
 
-      Append_To (TSD_Aggr_List,
-        Make_Integer_Literal (Loc, Type_Access_Level (Typ)));
+      Append_To (TSD_Aggr_List, Dynamic_Type_Access_Level (Typ));
 
       --  Alignment
 

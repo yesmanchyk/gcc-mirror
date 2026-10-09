@@ -32,6 +32,10 @@
 
 #include "coretypes.h"
 #include "tree.h"
+#include "stor-layout.h"
+#include "ggc.h"
+#include "gtype-desc.h"
+#include "../../libgcobol/literal-call-descriptor.h"
 #include "tree-iterator.h"
 #include "stringpool.h"
 #include "diagnostic-core.h"
@@ -50,6 +54,7 @@
 #include "genmath.h"
 #include "structs.h"
 #include "../../libgcobol/gcobolio.h"
+#include "../../libgcobol/cobol-endian.h"
 #include "../../libgcobol/charmaps.h"
 #include "../../libgcobol/valconv.h"
 #include "show_parse.h"
@@ -138,7 +143,8 @@ static bool auto_advance_is_AFTER_advancing = 0;
     casts.  For example, main() returns an INT, as do functions that
     return the default RETURN-CODE will have */
 
-#define COBOL_FUNCTION_RETURN_TYPE SSIZE_T
+#define COBOL_FUNCTION_RETURN_64  LONG
+#define COBOL_FUNCTION_RETURN_128 INT128
 
 #define MAX_AFTERS 8
 
@@ -153,7 +159,7 @@ static bool next_program_is_main = false;   // transient switch for the module
 static char *main_entry_point = NULL;
 
 static bool static_call = true;
-bool use_static_call( bool yn ) { return static_call = yn; }
+bool set_use_static_call( bool yn ) { return static_call = yn; }
 static bool use_static_call() { return static_call; }
 
 // This global variable can be set upstream, like from a compiler
@@ -228,12 +234,13 @@ create_cblc_string_variable(const char *var_name, const char *var_contents)
   TYPE_NAME(array_of_characters) = get_identifier("cblc_string");
   tree constr = build_string(strlen(var_contents)+1, var_contents);
   TREE_TYPE(constr) = array_of_characters;
-  TREE_STATIC(constr)    = 1;
-  TREE_CONSTANT(constr)  = 1;
+  TREE_STATIC(constr)           = 1;
+
+  // This is a file-scope internal variable
   tree entry_point = gg_declare_variable(array_of_characters,
                                          var_name,
                                          constr,
-                                         vs_external);
+                                         vs_global);
   gg_define_from_declaration(entry_point);
   }
 
@@ -299,7 +306,7 @@ build_main_that_calls_something(const char *something)
 
   char *psz = cobol_name_mangler(something);
   gg_assign(var_decl_main_called, integer_one_node);
-  gg_return(gg_cast(INT, gg_call_expr( COBOL_FUNCTION_RETURN_TYPE,
+  gg_return(gg_cast(INT, gg_call_expr( COBOL_FUNCTION_RETURN_64,
                                        psz,
                                        argc,
                                        argv,
@@ -324,7 +331,7 @@ get_field_p(size_t index)
       dbgmsg("%s (type: %s) improperly has a NULL var_decl_node",
                   field->name,
                   cbl_field_type_str(field->type));
-      cbl_internal_error(
+      cbl_internal_error("%s",
                 "Probable cause: it was referenced without being defined.");
       }
 
@@ -459,6 +466,25 @@ get_level_88_domain(size_t parent_capacity, cbl_field_t *var, size_t &returned_s
 
   // Numerics are converted to strings, and handled as above
 
+  /*  For example:
+
+       77 var-1 PIC 99V9.
+           88 var-1-z VALUE zero THRU 10.
+           88 var-1-big VALUE 20 THRU 40.
+           88 var-1-huge VALUE 40 THRU 999.
+           88 var-1-asc VALUE "U2" THRU "XYZZY".
+
+    Creates these four string segments:
+
+      "1FZ2A10"
+      "2A202A40"
+      "2A403A999"
+      "2AU25AXYZZY"
+
+    Each gets converted to UTF-32 as the initial value.
+
+    */
+
   size_t retval_capacity = 64;
   char *retval = static_cast<char *>(xmalloc(retval_capacity));
   size_t output_index = 0;
@@ -476,7 +502,7 @@ get_level_88_domain(size_t parent_capacity, cbl_field_t *var, size_t &returned_s
     stream = level_88_helper( parent_capacity,
                               domain->first,
                               stream_len);
-    if( output_index + stream_len > retval_capacity )
+    while( output_index + stream_len > retval_capacity )
       {
       retval_capacity *= 2;
       retval = static_cast<char *>(xrealloc(retval, retval_capacity));
@@ -491,7 +517,7 @@ get_level_88_domain(size_t parent_capacity, cbl_field_t *var, size_t &returned_s
     stream = level_88_helper( parent_capacity,
                               domain->last,
                               stream_len);
-    if( output_index + stream_len > retval_capacity )
+    while( output_index + stream_len > retval_capacity )
       {
       retval_capacity *= 2;
       retval = static_cast<char *>(xrealloc(retval, retval_capacity));
@@ -561,7 +587,7 @@ get_class_condition_string(cbl_field_t *var)
                               : strlen(domain->first.name());
 
     cbl_encoding_t from = var->codeset.default_encodings.source->type;
-    cbl_encoding_t to = DEFAULT_32_ENCODING;
+    cbl_encoding_t to = HOST_32_ENCODING;
     size_t nbytes;
     const char *converted;
 
@@ -569,7 +595,7 @@ get_class_condition_string(cbl_field_t *var)
       {
       if( strlen(ach) > sizeof(ach) - 1000  )
         {
-        cbl_internal_error("That string should not be that long.");
+        cbl_internal_error("%s", "That string should not be that long.");
         }
 
       // We are working with unquoted strings that contain the values
@@ -592,6 +618,10 @@ get_class_condition_string(cbl_field_t *var)
       {
       // Since the first.name is a single character, we can do this as
       // a single-character pair.
+      if( strlen(ach) > sizeof(ach) - 1000  )
+        {
+        cbl_internal_error("%s", "That string should not be that long.");
+        }
       converted = __gg__iconverter(from,
                                    to,
                                    domain->first.name(),
@@ -620,6 +650,11 @@ get_class_condition_string(cbl_field_t *var)
       }
     else
       {
+      if( strlen(ach) > sizeof(ach) - 1000  )
+        {
+        cbl_internal_error("%s", "That string should not be that long.");
+        }
+
       gcc_assert( first_name_length > 1 );
 
       // We are working with a string larger than 1 character.  The COBOL
@@ -737,29 +772,6 @@ parser_call_target_convention( tree func )
   return cbl_call_cobol_e;
   }
 
-void
-parser_call_targets_dump()
-  {
-    dbgmsg( "call targets for #" HOST_SIZE_T_PRINT_UNSIGNED " NOT dumping",
-            (fmt_size_t)current_program_index() );
-#if 0 // A change to call_targets rendered this routine useless.  Until we get
-      // around to repairing it, this code is left for reference.
-    for( const auto& elem : call_targets ) {
-      const auto& k = elem.first;
-      const auto& v = elem.second;
-      fprintf(stderr, "\t#%-3" GCC_PRISZ "u %s calls %s ",
-              (fmt_size_t)k.caller, cbl_label_of(symbol_at(k.caller))->name,
-              k.called);
-      char ch = '[';
-      for( auto func : v ) {
-        fprintf( stderr, "%c %s", ch, IDENTIFIER_POINTER(DECL_NAME(func)) );
-        ch = ',';
-      }
-      fprintf(stderr, " ]\n");
-    }
-#endif
-  }
-
 size_t
 parser_call_target_update( size_t caller,
                            const char plain_name[],
@@ -771,7 +783,7 @@ parser_call_target_update( size_t caller,
 
   for( auto call_expr : p->second )
     {
-    tree fndecl_type = build_varargs_function_type_array( COBOL_FUNCTION_RETURN_TYPE,
+    tree fndecl_type = build_varargs_function_type_array( COBOL_FUNCTION_RETURN_64,
                        0,     // No parameters yet
                        NULL); // And, hence, no types
 
@@ -790,79 +802,88 @@ function_pointer_from_name(const cbl_refer_t &name,
   {
   Analyze();
 
+  tree retval;
+
   tree function_type = build_varargs_function_type_array(
-                        function_return_type,
-                        0,
-                        NULL);
+                         function_return_type,
+                         0,
+                         NULL);
   tree function_pointer_type = build_pointer_type(function_type);
-  tree function_pointer       = gg_define_variable(function_pointer_type,
-                                                  "..function_pointer.1",
-                                                  vs_stack);
+
+  cbl_call_convention_t call_convention = current_call_convention();
+
   if( name.field->type == FldPointer )
     {
-    // If the parameter is a pointer, just pick up the value and head for the
-    // exit
+    tree location;
+
     if( refer_is_clean(name) )
       {
-      gg_memcpy(gg_get_address_of(function_pointer),
-                member(name.field->var_decl_node, "data"),
-                sizeof_pointer);
+      location = member(name.field->var_decl_node, "data");
       }
     else
       {
-      gg_memcpy(gg_get_address_of(function_pointer),
-                qualified_data_location(name),
-                sizeof_pointer);
+      location = qualified_data_location(name);
       }
-    return function_pointer;
+
+    tree unaligned_function_pointer_type
+      = build_aligned_type(function_pointer_type,
+                           BITS_PER_UNIT);
+
+    retval = fold_build2(
+               MEM_REF,
+               unaligned_function_pointer_type,
+               location,
+               build_int_cst_type(ptr_type_node, 0));
     }
   else if( use_static_call() && is_literal(name.field) )
     {
-    tree fndecl_type = build_varargs_function_type_array( function_return_type,
-                       0,     // No parameters yet
-                       NULL); // And, hence, no types
+    char *tname
+      = static_cast<char *>(xmalloc(name.field->data.capacity()+1));
 
-    // Fetch the FUNCTION_DECL for that FUNCTION_TYPE
-    char *tname = static_cast<char *>(xmalloc(name.field->data.capacity()+1));
-    memcpy(tname, name.field->data.original(), name.field->data.capacity());
+    memcpy(tname,
+           name.field->data.original(),
+           name.field->data.capacity());
+
     tname[name.field->data.capacity()] = '\0';
+
     tree function_decl = gg_build_fn_decl(tname,
-                                          fndecl_type);
+                                          function_type);
     free(tname);
-    // Take the address of the function decl:
-    tree address_of_function = gg_get_address_of(function_decl);
-    gg_assign(function_pointer, address_of_function);
+
+    retval = gg_get_address_of(function_decl);
+    }
+  else if( name.field->type == FldLiteralA )
+    {
+    retval = gg_cast(
+               function_pointer_type,
+               gg_call_expr(
+                 VOID_P,
+                 "__gg__function_handle_from_literal",
+                 build_int_cst(
+                   INT,
+                   current_function->our_symbol_table_index),
+                 gg_string_literal(name.field->data.original()),
+                 build_int_cst_type(INT, call_convention),
+                 NULL_TREE));
     }
   else
     {
-    // We are not using static calls.
-    if( name.field->type == FldLiteralA )
-      {
-      gg_assign(function_pointer,
-                gg_cast(build_pointer_type(function_type),
-                        gg_call_expr( VOID_P,
-                              "__gg__function_handle_from_literal",
-                              build_int_cst_type(INT,
-                                current_function->our_symbol_table_index),
-                              gg_string_literal(name.field->data.original()),
-                              NULL_TREE)));
-      }
-    else
-      {
-      gg_assign(function_pointer,
-                gg_cast(build_pointer_type(function_type),
-                        gg_call_expr( VOID_P,
-                                "__gg__function_handle_from_name",
-                                build_int_cst_type(INT,
-                                current_function->our_symbol_table_index),
-                                gg_get_address_of(name.field->var_decl_node),
-                                refer_offset(name),
-                                refer_size_source(  name),
-                                NULL_TREE)));
-      }
+    retval = gg_cast(
+               function_pointer_type,
+               gg_call_expr(
+                 VOID_P,
+                 "__gg__function_handle_from_name",
+                 build_int_cst(
+                   INT,
+                   current_function->our_symbol_table_index),
+                 gg_get_address_of(name.field->var_decl_node),
+                 refer_offset(name),
+                 refer_size_source(name),
+                 build_int_cst_type(INT, call_convention),
+                 NULL_TREE));
     }
 
-  return function_pointer;
+  return retval;
   }
 
 void
@@ -898,7 +919,7 @@ parser_initialize_programs( size_t nprogs,
   for( size_t i=0; i<nprogs; i++ )
     {
     tree function_pointer = function_pointer_from_name( progs[i],
-                                                        COBOL_FUNCTION_RETURN_TYPE);
+                                                        COBOL_FUNCTION_RETURN_64);
     gg_call(VOID,
             "__gg__to_be_canceled",
             function_pointer,
@@ -906,33 +927,97 @@ parser_initialize_programs( size_t nprogs,
     }
   }
 
-static
-tree
-array_of_long_long(const char *name, const std::vector<uint64_t>& vals)
+static tree
+array_of_uint64(const char *name,
+                   const std::vector<uint64_t> &vals)
   {
-  // We need to create a file-static static array of 64-bit integers:
-  tree array_of_ulonglong_type = build_array_type_nelts(ULONGLONG, vals.size()+1);
-  tree array_of_ulonglong = gg_define_variable( array_of_ulonglong_type,
-                                                name,
-                                                vs_file_static);
-  // We have the array.  Now we need to build the constructor for it
-  tree constr = make_node(CONSTRUCTOR);
-  TREE_TYPE(constr) = array_of_ulonglong_type;
-  TREE_STATIC(constr)    = 1;
-  TREE_CONSTANT(constr)  = 1;
+  /*
+   * Create:
+   *
+   *   static const unsigned long long name[] =
+   *     {
+   *     vals.size(),
+   *     vals[0],
+   *     vals[1],
+   *     ...
+   *     };
+   */
+  tree const_uint64_type =
+    build_qualified_type( UINT64,
+                          TYPE_QUAL_CONST );
+  tree array_of_uint64_type =
+    build_array_type_nelts( const_uint64_type,
+                            vals.size()+1 );
+  tree array_of_uint64 =
+    gg_define_variable( array_of_uint64_type,
+                        name,
+                        vs_file_static );
+  vec<constructor_elt, va_gc> *elts = NULL;
+  /*
+   * The first element contains the number of elements that follow.
+   */
+  CONSTRUCTOR_APPEND_ELT(
+    elts,
+    bitsize_int( 0 ),
+    build_int_cstu( UINT64, vals.size() ) );
 
-  // The first element of the array contains the number of elements to follow
-  CONSTRUCTOR_APPEND_ELT( CONSTRUCTOR_ELTS(constr),
-                          build_int_cst_type(SIZE_T, 0),
-                          build_int_cst_type(ULONGLONG, vals.size()) );
-  for(size_t i=0; i<vals.size(); i++)
+  for( size_t i=0; i<vals.size(); i++ )
     {
-    CONSTRUCTOR_APPEND_ELT( CONSTRUCTOR_ELTS(constr),
-                            build_int_cst_type(SIZE_T, i+1),
-                            build_int_cst_type(ULONGLONG, vals[i]) );
+    CONSTRUCTOR_APPEND_ELT(
+      elts,
+      bitsize_int( i+1 ),
+      build_int_cstu( UINT64, vals[i] ) );
     }
-  DECL_INITIAL(array_of_ulonglong) = constr;
-  return array_of_ulonglong;
+  tree constr =
+    build_constructor( array_of_uint64_type,
+                       elts );
+  /*
+   * build_constructor() determines TREE_CONSTANT from its elements.
+   * All of these elements are INTEGER_CST nodes.
+   */
+  gcc_assert( TREE_CONSTANT( constr ) );
+  /*
+   * The constructor represents a value suitable for static storage.
+   */
+  TREE_STATIC( constr ) = 1;
+  /*
+   * Record the const qualification on the declaration itself.
+   */
+  TREE_READONLY( array_of_uint64 ) = 1;
+  DECL_INITIAL( array_of_uint64 ) = constr;
+  return array_of_uint64;
+  }
+
+tree
+gg_array_of_size_t(const std::vector<size_t> &values)
+  {
+  gcc_assert( !values.empty() );
+  tree const_size_t_type = build_qualified_type( SIZE_T, TYPE_QUAL_CONST );
+  tree array_type = build_array_type_nelts( const_size_t_type, values.size() );
+
+  vec<constructor_elt, va_gc> *elts = NULL;
+  for( size_t i = 0; i < values.size(); i++ )
+    {
+    CONSTRUCTOR_APPEND_ELT(
+      elts,
+      bitsize_int( i ),
+      build_int_cstu( SIZE_T, values[i] ) );
+    }
+  tree constr = build_constructor( array_type, elts );
+  /*
+   * This marks the constant constructor as suitable for static
+   * allocation.  It does not give the VAR_DECL static storage
+   * duration.
+   */
+  TREE_STATIC( constr ) = 1;
+  tree array_decl = gg_define_variable( array_type );
+  /*
+   * Represent the const qualification on the object as well as on
+   * its array element type.
+   */
+  TREE_READONLY( array_decl ) = 1;
+  DECL_INITIAL( array_decl ) = constr;
+  return gg_pointer_to_array(array_decl);
   }
 
 /*
@@ -970,7 +1055,7 @@ parser_compile_ecs( const std::vector<uint64_t>& ecs )
   char ach[64];
   static int counter = 1;
   sprintf(ach, "_ecs_table_%d", counter++);
-  tree retval =  array_of_long_long(ach, ecs);
+  tree retval =  array_of_uint64(ach, ecs);
   SHOW_IF_PARSE(nullptr)
     {
     SHOW_PARSE_HEADER
@@ -1017,7 +1102,7 @@ parser_compile_dcls( const std::vector<uint64_t>& dcls )
   char ach[64];
   static int counter = 1;
   sprintf(ach, "_dcls_table_%d", counter++);
-  tree retval =  array_of_long_long(ach, dcls);
+  tree retval =  array_of_uint64(ach, dcls);
   SHOW_IF_PARSE(nullptr)
     {
     SHOW_PARSE_HEADER
@@ -1056,7 +1141,7 @@ store_location_stuff(const cbl_name_t statement_name)
     else
       {
       gg_assign(var_decl_exception_section,
-                gg_cast(build_pointer_type(CHAR_P),null_pointer_node));
+                gg_cast(CONST_CHAR_P, null_pointer_node));
       }
 
     if( strstr(current_function->current_paragraph->label->name, "_implicit")
@@ -1068,7 +1153,7 @@ store_location_stuff(const cbl_name_t statement_name)
     else
       {
       gg_assign(var_decl_exception_paragraph,
-                gg_cast(build_pointer_type(CHAR_P), null_pointer_node));
+                gg_cast(CONST_CHAR_P, null_pointer_node));
       }
 
     gg_assign(var_decl_exception_source_file,
@@ -1226,6 +1311,15 @@ parser_statement_end( const std::list<cbl_field_t*>&flist)
       }
     }
   }
+
+
+static const int DEFAULT_BYTE_MASK = 0x00000000FF;
+static const int NSUBSCRIPT_MASK   = 0x0000000F00;
+static const int NSUBSCRIPT_SHIFT  =            8;
+static const int DEFAULTBYTE_BIT   = 0x0000001000;
+static const int EXPLICIT_BIT      = 0x0000002000;
+static const int REDEFINED_BIT     = 0x0000004000;
+static const int JUST_ONCE_BIT     = 0x0000008000;
 
 static void
 initialize_variable_internal( cbl_refer_t refer,
@@ -1417,14 +1511,6 @@ initialize_variable_internal( cbl_refer_t refer,
       }
     }
 
-  static const int DEFAULT_BYTE_MASK = 0x00000000FF;
-  static const int NSUBSCRIPT_MASK   = 0x0000000F00;
-  static const int NSUBSCRIPT_SHIFT  =            8;
-  static const int DEFAULTBYTE_BIT   = 0x0000001000;
-  static const int EXPLICIT_BIT      = 0x0000002000;
-  static const int REDEFINED_BIT     = 0x0000004000;
-  static const int JUST_ONCE_BIT     = 0x0000008000;
-
   int flag_bits  = 0;
   flag_bits     |= explicitly ? EXPLICIT_BIT : 0;
   flag_bits     |= is_redefined && !explicitly ? REDEFINED_BIT : 0 ;
@@ -1544,14 +1630,14 @@ initialize_variable_internal( cbl_refer_t refer,
     else
       {
       // Convert strings of spaces to "<SPACES>"
-      tree spaces = gg_define_int(0);
+      tree spaces = gg_define_variable(INT, 0L);
       if(   parsed_var->type == FldGroup
          || parsed_var->type == FldAlphanumeric
          || parsed_var->type == FldAlphaEdited
          || parsed_var->type == FldLiteralA )
         {
         gg_assign(spaces, integer_one_node);
-        tree counter = gg_define_int(parsed_var->data.capacity());
+        tree counter = gg_define_variable(INT, parsed_var->data.capacity());
         WHILE(counter, gt_op, integer_zero_node)
           {
           gg_decrement(counter);
@@ -1600,29 +1686,26 @@ parser_initialize(const cbl_refer_t& refer, bool like_parser_symbol_add)
   }
 
 static
-void
-depending_on_value(tree depending_on, cbl_field_t *current_sizer)
+tree
+depending_on_value(cbl_field_t *current_sizer)
   {
   // We have to deal with the possibility of a DEPENDING_ON variable,
   // and we have to apply array bounds whether or not there is a DEPENDING_ON
-  // variable:
+  // variable.
 
-//  tree occurs_lower = gg_define_variable(LONG, "_lower");
-//  tree occurs_upper = gg_define_variable(LONG, "_upper");
-//
-//  gg_assign(occurs_lower, build_int_cst_type(LONG, current_sizer->occurs.bounds.lower));
-//  gg_assign(occurs_upper, build_int_cst_type(LONG, current_sizer->occurs.bounds.upper));
+  tree depending_on;  // This is a LONG value
 
   gcc_assert(current_sizer);
   if( current_sizer->occurs.depending_on )
     {
-    get_depending_on_value_from_odo(depending_on, current_sizer);
+    depending_on = get_depending_on_value_from_odo(current_sizer);
     }
   else
     {
-    gg_assign(depending_on,
-              build_int_cst_type(LONG, current_sizer->occurs.bounds.upper));
+    depending_on = build_int_cst_type(LONG,
+                                      current_sizer->occurs.bounds.upper);
     }
+  return depending_on;
   }
 
 static tree
@@ -1632,7 +1715,7 @@ tree_type_from_field_type(cbl_field_t *field, size_t &nbytes)
       CALL ... USING <var> and the matching PROCEDURE DIVISION USING <var> of
       a PROGRAM-ID or FUNCTION-ID
       */
-  tree retval = COBOL_FUNCTION_RETURN_TYPE;
+  tree retval = COBOL_FUNCTION_RETURN_64;
   nbytes = 8;
   if( field )
     {
@@ -1716,6 +1799,25 @@ tree_type_from_field_type(cbl_field_t *field, size_t &nbytes)
       {
       retval = INT128;
       }
+    }
+  return retval;
+  }
+
+static
+tree get_interfunction_type(tree type)
+  {
+  tree retval;
+  if( SCALAR_FLOAT_TYPE_P(type) )
+    {
+    retval = type;
+    }
+  else if( gg_sizeof(type) > 8 )
+    {
+    retval = COBOL_FUNCTION_RETURN_128;
+    }
+  else
+    {
+    retval = COBOL_FUNCTION_RETURN_64;
     }
   return retval;
   }
@@ -2042,11 +2144,16 @@ leave_section_internal()
   Analyze();
   SHOW_PARSE
     {
-    if(gg_trans_unit.function_stack.size() && current_function && current_function->current_section)
+    if(   gg_trans_unit.function_stack.size()
+       && current_function && current_function->current_section)
       {
       SHOW_PARSE_HEADER
       SHOW_PARSE_TEXT(" ")
       SHOW_PARSE_TEXT(current_function->current_section->label->name)
+      SHOW_PARSE_TEXT(" ")
+      fprintf(stderr,
+              "%p",
+              static_cast<void *>(current_function->current_section->label));
       SHOW_PARSE_END
       }
     }
@@ -2391,8 +2498,7 @@ parser_goto(const cbl_refer_t &value_ref,
     {
     // We will implement the two or more fanout with a switch statement.
 
-    tree value;
-    get_binary_value(value, value_ref, INT);
+    tree value = get_binary_value(value_ref, INT);
 
     // value is properly 1 through nargs
 
@@ -2463,8 +2569,9 @@ parser_perform_times( cbl_label_t *proc_1, const cbl_refer_t &count )
   perform_is_armed = CURRENT_LINE_NUMBER ;
 
   // Get the count:
-  tree counter;
-  get_binary_value(counter, count, LONG);
+  tree counter = gg_define_variable(LONG);
+  tree counter_i = get_binary_value(count, LONG);
+  gg_assign(counter, counter_i);
 
   // Make sure the initial count is valid:
   WHILE( counter, gt_op, gg_cast(LONG, integer_zero_node) )
@@ -2621,11 +2728,13 @@ internal_perform_through_times(   cbl_label_t *proc_1,
 
   perform_is_armed = CURRENT_LINE_NUMBER ;
 
-  tree counter;
-  get_binary_value(counter, count, LONG);
+  tree counter = gg_define_variable(LONG);
+  tree counter_i = get_binary_value(count, LONG);
+  gg_assign(counter, counter_i);
   WHILE( counter, gt_op, gg_cast(LONG, integer_zero_node) )
     {
-    internal_perform_through(proc_1, proc_2, true); // true means suppress_nexting
+    static const bool suppress_nexting = true;
+    internal_perform_through(proc_1, proc_2, suppress_nexting);
     gg_decrement(counter);
     }
     WEND
@@ -2750,34 +2859,34 @@ parser_enter_file(const char *filename)
   // Establish our variable declarations for global variables in libgcobol:
 
 #define SET_VAR_DECL(A, B, C) \
-  A = gg_declare_variable(B, C, NULL_TREE, vs_external_reference)
+  A = gg_declare_variable(B, C, NULL_TREE, vs_extern)
 
-    SET_VAR_DECL(var_decl_exception_code         , INT    , "__gg__exception_code");
-    SET_VAR_DECL(var_decl_exception_file_status  , INT    , "__gg__exception_file_status");
-    SET_VAR_DECL(var_decl_exception_file_name    , CHAR_P , "__gg__exception_file_name");
-    SET_VAR_DECL(var_decl_exception_statement    , CHAR_P , "__gg__exception_statement");
-    SET_VAR_DECL(var_decl_exception_source_file  , CHAR_P , "__gg__exception_source_file");
-    SET_VAR_DECL(var_decl_exception_line_number  , INT    , "__gg__exception_line_number");
-    SET_VAR_DECL(var_decl_exception_program_id   , CHAR_P , "__gg__exception_program_id");
-    SET_VAR_DECL(var_decl_exception_section      , CHAR_P , "__gg__exception_section");
-    SET_VAR_DECL(var_decl_exception_paragraph    , CHAR_P , "__gg__exception_paragraph");
+    SET_VAR_DECL(var_decl_exception_code         , INT          , "__gg__exception_code");
+    SET_VAR_DECL(var_decl_exception_file_status  , INT          , "__gg__exception_file_status");
+    SET_VAR_DECL(var_decl_exception_file_name    , CONST_CHAR_P , "__gg__exception_file_name");
+    SET_VAR_DECL(var_decl_exception_statement    , CONST_CHAR_P , "__gg__exception_statement");
+    SET_VAR_DECL(var_decl_exception_source_file  , CONST_CHAR_P , "__gg__exception_source_file");
+    SET_VAR_DECL(var_decl_exception_line_number  , INT          , "__gg__exception_line_number");
+    SET_VAR_DECL(var_decl_exception_program_id   , CONST_CHAR_P , "__gg__exception_program_id");
+    SET_VAR_DECL(var_decl_exception_section      , CONST_CHAR_P , "__gg__exception_section");
+    SET_VAR_DECL(var_decl_exception_paragraph    , CONST_CHAR_P , "__gg__exception_paragraph");
 
-    SET_VAR_DECL(var_decl_default_compute_error  , INT    , "__gg__default_compute_error");
-    SET_VAR_DECL(var_decl_rdigits                , INT    , "__gg__rdigits");
-    SET_VAR_DECL(var_decl_unique_prog_id         , SIZE_T , "__gg__unique_prog_id");
+    SET_VAR_DECL(var_decl_default_compute_error  , INT          , "__gg__default_compute_error");
+    SET_VAR_DECL(var_decl_fracdigits             , INT          , "__gg__fracdigits");
+    SET_VAR_DECL(var_decl_unique_prog_id         , SIZE_T       , "__gg__unique_prog_id");
 
-    SET_VAR_DECL(var_decl_exit_address           , VOID_P , "__gg__exit_address");
+    SET_VAR_DECL(var_decl_exit_address           , VOID_P       , "__gg__exit_address");
 
-    SET_VAR_DECL(var_decl_call_parameter_signature , CHAR_P   , "__gg__call_parameter_signature");
-    SET_VAR_DECL(var_decl_call_parameter_count     , INT      , "__gg__call_parameter_count");
+    SET_VAR_DECL(var_decl_call_parameter_signature , CHAR_P     , "__gg__call_parameter_signature");
+    SET_VAR_DECL(var_decl_call_parameter_count     , INT        , "__gg__call_parameter_count");
     SET_VAR_DECL(var_decl_call_parameter_lengths   , build_array_type(SIZE_T, NULL),
                                                             "__gg__call_parameter_lengths");
 
-    SET_VAR_DECL(var_decl_nop                     , INT                     , "__gg__nop"             );
-    SET_VAR_DECL(var_decl_main_called             , INT                     , "__gg__main_called"     );
-    SET_VAR_DECL(var_decl_entry_index             , SIZE_T                  , "__gg__entry_index"     );
-    SET_VAR_DECL(var_decl_dialects                , INT                     , "__gg__dialects"        );
-    SET_VAR_DECL(var_decl_dp2bin                  , build_array_type(UCHAR, NULL), "__gg__dp2bin");
+    SET_VAR_DECL(var_decl_nop                     , INT                          , "__gg__nop"        );
+    SET_VAR_DECL(var_decl_main_called             , INT                          , "__gg__main_called");
+    SET_VAR_DECL(var_decl_entry_index             , SIZE_T                       , "__gg__entry_index");
+    SET_VAR_DECL(var_decl_dialects                , INT                          , "__gg__dialects"   );
+    SET_VAR_DECL(var_decl_dp2bin                  , build_array_type(UCHAR, NULL), "__gg__dp2bin"     );
     }
   }
 
@@ -2873,7 +2982,7 @@ enter_program_common(const char *funcname, const char *funcname_)
   // have no parameters.  We'll chain the parameters on in parser_division(),
   // when we process PROCEDURE DIVISION USING...
 
-  gg_define_function(COBOL_FUNCTION_RETURN_TYPE,
+  gg_define_function(COBOL_FUNCTION_RETURN_64,
                      funcname,
                      funcname_,
                      NULL_TREE);
@@ -2894,8 +3003,8 @@ enter_program_common(const char *funcname, const char *funcname_)
 
   gg_assign(current_function->first_time_through, integer_zero_node);
 
-  current_function->perform_exit_address
-    = gg_define_void_star("_perform_exit_address");
+  current_function->perform_exit_address =
+                         gg_define_variable (VOID_P, "_perform_exit_address");
 
   // Make sure the following are null, because when we create the unnamed
   // default section, parser_enter_section will attempt to close them out. And
@@ -3494,13 +3603,14 @@ parser_init_list()
           "..variables_to_init_" HOST_SIZE_T_PRINT_DEC,
           (fmt_size_t)current_function->our_symbol_table_index);
   tree array = gg_trans_unit_var_decl(ach);
+
+  int flag_bits =  wsclear()
+                ? DEFAULTBYTE_BIT + (*wsclear() & DEFAULT_BYTE_MASK)
+                : 0;
   gg_call(VOID,
           "__gg__variables_to_init",
           gg_pointer_to_array(array),
-          wsclear() ? build_string_literal(
-                                    1,
-                                    reinterpret_cast<const char *>(wsclear()))
-                    : null_pointer_node,
+          build_int_cst_type(INT, flag_bits),
           NULL_TREE);
   }
 
@@ -3792,7 +3902,7 @@ parser_accept(const struct cbl_refer_t &tgt,
     case SYSPUNCH_e:
     case SYSPCH_e:
     case SYSERR_e:
-      cbl_internal_error("Not valid for ACCEPT statement.");
+      cbl_internal_error("%s", "Not valid for ACCEPT statement.");
       break;
 
     case ARG_NUM_e:
@@ -3832,50 +3942,67 @@ parser_accept(const struct cbl_refer_t &tgt,
     }
   if( function_to_call )
     {
-    tree erf = gg_define_int();
-    gg_assign(erf,
-              gg_call_expr(  INT,
-                            function_to_call,
-                            gg_get_address_of(tgt.field->var_decl_node),
-                            refer_offset(tgt),
-                            refer_size_dest(tgt),
-                            NULL_TREE));
-    if( error )
+    if( error || not_error )
       {
-      // There is an ON EXCEPTION phrase:
-      IF( erf, ne_op, integer_zero_node )
+      // We need to define a variable to avoid calling the function twice when
+      // there are both error and not_error calls.
+      tree erf = gg_define_variable(INT);
+      gg_assign(erf,
+                gg_call_expr(  INT,
+                              function_to_call,
+                              gg_get_address_of(tgt.field->var_decl_node),
+                              refer_offset(tgt),
+                              refer_size_dest(tgt),
+                              NULL_TREE));
+      if( error )
         {
-        SHOW_PARSE
+        // There is an ON EXCEPTION phrase:
+        IF( erf, ne_op, integer_zero_node )
           {
-          SHOW_PARSE_INDENT
-          SHOW_PARSE_TEXT("Laying down GOTO     error->INTO for_argv")
-          SHOW_PARSE_LABEL_OK(" ", error)
+          SHOW_PARSE
+            {
+            SHOW_PARSE_INDENT
+            SHOW_PARSE_TEXT("Laying down GOTO     error->INTO for_argv")
+            SHOW_PARSE_LABEL_OK(" ", error)
+            }
+          gg_append_statement( error->structs.arith_error->into.go_to );
           }
-        gg_append_statement( error->structs.arith_error->into.go_to );
+        ELSE
+          {
+          }
+          ENDIF
         }
-      ELSE
+      if( not_error )
         {
+        // There is an NOT ON EXCEPTION phrase:
+        IF( erf, eq_op, integer_zero_node )
+          {
+          SHOW_PARSE
+            {
+            SHOW_PARSE_INDENT
+            SHOW_PARSE_TEXT("Laying down GOTO not_error->INTO for_argv")
+            SHOW_PARSE_LABEL_OK(" ", not_error)
+            }
+          gg_append_statement( not_error->structs.arith_error->into.go_to );
+          }
+        ELSE
+          {
+          }
+          ENDIF
         }
-        ENDIF
       }
-    if( not_error )
+    else
       {
-      // There is an NOT ON EXCEPTION phrase:
-      IF( erf, eq_op, integer_zero_node )
-        {
-        SHOW_PARSE
-          {
-          SHOW_PARSE_INDENT
-          SHOW_PARSE_TEXT("Laying down GOTO not_error->INTO for_argv")
-          SHOW_PARSE_LABEL_OK(" ", not_error)
-          }
-        gg_append_statement( not_error->structs.arith_error->into.go_to );
-        }
-      ELSE
-        {
-        }
-        ENDIF
+      // Since neither error or not_error are operative, we don't need to
+      // save the return value anywhere.
+      gg_call(INT,
+              function_to_call,
+              gg_get_address_of(tgt.field->var_decl_node),
+              refer_offset(tgt),
+              refer_size_dest(tgt),
+              NULL_TREE);
       }
+
     if( error )
       {
       SHOW_PARSE
@@ -3981,103 +4108,133 @@ parser_accept_command_line( const cbl_refer_t &tgt,
     SHOW_PARSE_END
     }
 
-  tree erf = gg_define_variable(INT);
-
   if( !source.field )
     {
     // The whole command-line is wanted
-    gg_assign(erf,
-              gg_call_expr( INT,
-                            "__gg__get_command_line",
-                            gg_get_address_of(tgt.field->var_decl_node),
-                            refer_offset(tgt),
-                            refer_size_dest(tgt),
-                            NULL_TREE));
-    if( error )
+    if( error || not_error )
       {
-      // There is an ON EXCEPTION phrase:
-      IF( erf, ne_op, integer_zero_node )
+      tree erf = gg_define_variable(INT);
+      // We need to put the error return someplace to avoid evaluating the
+      // function twice when both error and not_error areactive
+      gg_assign(erf,
+                gg_call_expr( INT,
+                              "__gg__get_command_line",
+                              gg_get_address_of(tgt.field->var_decl_node),
+                              refer_offset(tgt),
+                              refer_size_dest(tgt),
+                              NULL_TREE));
+      if( error )
         {
-        SHOW_PARSE
+        // There is an ON EXCEPTION phrase:
+        IF( erf, ne_op, integer_zero_node )
           {
-          SHOW_PARSE_INDENT
-          SHOW_PARSE_TEXT("Laying down GOTO     error->INTO for_command_line")
-          SHOW_PARSE_LABEL_OK(" ", error)
+          SHOW_PARSE
+            {
+            SHOW_PARSE_INDENT
+            SHOW_PARSE_TEXT("Laying down GOTO     error->INTO for_command_line")
+            SHOW_PARSE_LABEL_OK(" ", error)
+            }
+          gg_append_statement( error->structs.arith_error->into.go_to );
           }
-        gg_append_statement( error->structs.arith_error->into.go_to );
+        ELSE
+          {
+          }
+          ENDIF
         }
-      ELSE
+      if( not_error )
         {
+        // There is an NOT ON EXCEPTION phrase:
+        IF( erf, eq_op, integer_zero_node )
+          {
+          SHOW_PARSE
+            {
+            SHOW_PARSE_INDENT
+            SHOW_PARSE_TEXT("Laying down GOTO not_error->INTO for command_line")
+            SHOW_PARSE_LABEL_OK(" ", not_error)
+            }
+          gg_append_statement( not_error->structs.arith_error->into.go_to );
+          }
+        ELSE
+          {
+          }
+          ENDIF
         }
-        ENDIF
       }
-    if( not_error )
+    else
       {
-      // There is an NOT ON EXCEPTION phrase:
-      IF( erf, eq_op, integer_zero_node )
-        {
-        SHOW_PARSE
-          {
-          SHOW_PARSE_INDENT
-          SHOW_PARSE_TEXT("Laying down GOTO not_error->INTO for command_line")
-          SHOW_PARSE_LABEL_OK(" ", not_error)
-          }
-        gg_append_statement( not_error->structs.arith_error->into.go_to );
-        }
-      ELSE
-        {
-        }
-        ENDIF
+      // We don't need to store the error return
+      gg_call( INT,
+              "__gg__get_command_line",
+              gg_get_address_of(tgt.field->var_decl_node),
+              refer_offset(tgt),
+              refer_size_dest(tgt),
+              NULL_TREE);
       }
     }
   else
     {
     // A particular parameter has been requested:
-    gg_assign(erf,
-              gg_call_expr(  INT,
-                            "__gg__get_argv",
-                            gg_get_address_of(tgt.field->var_decl_node),
-                            refer_offset(tgt),
-                            refer_size_dest(tgt),
-                            gg_get_address_of(source.field->var_decl_node),
-                            refer_offset(source),
-                            refer_size_dest(source),
-                            NULL_TREE));
-    if( error )
+    if( error || not_error )
       {
-      // There is an ON EXCEPTION phrase:
-      IF( erf, ne_op, integer_zero_node )
+      tree erf = gg_define_variable(INT);
+      gg_assign(erf,
+                gg_call_expr(  INT,
+                              "__gg__get_argv",
+                              gg_get_address_of(tgt.field->var_decl_node),
+                              refer_offset(tgt),
+                              refer_size_dest(tgt),
+                              gg_get_address_of(source.field->var_decl_node),
+                              refer_offset(source),
+                              refer_size_dest(source),
+                              NULL_TREE));
+      if( error )
         {
-        SHOW_PARSE
+        // There is an ON EXCEPTION phrase:
+        IF( erf, ne_op, integer_zero_node )
           {
-          SHOW_PARSE_INDENT
-          SHOW_PARSE_TEXT("Laying down GOTO     error->INTO for_argv")
-          SHOW_PARSE_LABEL_OK(" ", error)
+          SHOW_PARSE
+            {
+            SHOW_PARSE_INDENT
+            SHOW_PARSE_TEXT("Laying down GOTO     error->INTO for_argv")
+            SHOW_PARSE_LABEL_OK(" ", error)
+            }
+          gg_append_statement( error->structs.arith_error->into.go_to );
           }
-        gg_append_statement( error->structs.arith_error->into.go_to );
+        ELSE
+          {
+          }
+          ENDIF
         }
-      ELSE
+      if( not_error )
         {
+        // There is an NOT ON EXCEPTION phrase:
+        IF( erf, eq_op, integer_zero_node )
+          {
+          SHOW_PARSE
+            {
+            SHOW_PARSE_INDENT
+            SHOW_PARSE_TEXT("Laying down GOTO not_error->INTO for_argv")
+            SHOW_PARSE_LABEL_OK(" ", not_error)
+            }
+          gg_append_statement( not_error->structs.arith_error->into.go_to );
+          }
+        ELSE
+          {
+          }
+          ENDIF
         }
-        ENDIF
       }
-    if( not_error )
+    else
       {
-      // There is an NOT ON EXCEPTION phrase:
-      IF( erf, eq_op, integer_zero_node )
-        {
-        SHOW_PARSE
-          {
-          SHOW_PARSE_INDENT
-          SHOW_PARSE_TEXT("Laying down GOTO not_error->INTO for_argv")
-          SHOW_PARSE_LABEL_OK(" ", not_error)
-          }
-        gg_append_statement( not_error->structs.arith_error->into.go_to );
-        }
-      ELSE
-        {
-        }
-        ENDIF
+      gg_call(  INT,
+               "__gg__get_argv",
+               gg_get_address_of(tgt.field->var_decl_node),
+               refer_offset(tgt),
+               refer_size_dest(tgt),
+               gg_get_address_of(source.field->var_decl_node),
+               refer_offset(source),
+               refer_size_dest(source),
+               NULL_TREE);
       }
     }
   if( error )
@@ -4152,42 +4309,57 @@ parser_accept_envar(const struct cbl_refer_t &tgt,
     TRACE1_END
     }
 
-  tree erf = gg_define_variable(INT);
+  if( error || not_error )
+    {
+    tree erf = gg_define_variable(INT);
+    gg_assign(erf,
+              gg_call_expr( INT,
+                            "__gg__accept_envar",
+                            gg_get_address_of(tgt.field->var_decl_node),
+                            refer_offset(tgt),
+                            refer_size_dest(tgt),
+                            gg_get_address_of(envar.field->var_decl_node),
+                            refer_offset(envar),
+                            refer_size_source(envar),
+                            NULL_TREE));
+    if( error )
+      {
+      // There is an ON EXCEPTION phrase:
+      IF( erf, ne_op, integer_zero_node )
+        {
+        gg_append_statement( error->structs.arith_error->into.go_to );
+        }
+      ELSE
+        {
+        }
+        ENDIF
+      }
+    if( not_error )
+      {
+      // There is an NOT ON EXCEPTION phrase:
+      IF( erf, eq_op, integer_zero_node )
+        {
+        gg_append_statement( not_error->structs.arith_error->into.go_to );
+        }
+      ELSE
+        {
+        }
+        ENDIF
+      }
+    }
+  else
+    {
+    gg_call( INT,
+             "__gg__accept_envar",
+             gg_get_address_of(tgt.field->var_decl_node),
+             refer_offset(tgt),
+             refer_size_dest(tgt),
+             gg_get_address_of(envar.field->var_decl_node),
+             refer_offset(envar),
+             refer_size_source(envar),
+             NULL_TREE);
+    }
 
-  gg_assign(erf,
-            gg_call_expr( INT,
-                          "__gg__accept_envar",
-                          gg_get_address_of(tgt.field->var_decl_node),
-                          refer_offset(tgt),
-                          refer_size_dest(tgt),
-                          gg_get_address_of(envar.field->var_decl_node),
-                          refer_offset(envar),
-                          refer_size_source(envar),
-                          NULL_TREE));
-  if( error )
-    {
-    // There is an ON EXCEPTION phrase:
-    IF( erf, ne_op, integer_zero_node )
-      {
-      gg_append_statement( error->structs.arith_error->into.go_to );
-      }
-    ELSE
-      {
-      }
-      ENDIF
-    }
-  if( not_error )
-    {
-    // There is an NOT ON EXCEPTION phrase:
-    IF( erf, eq_op, integer_zero_node )
-      {
-      gg_append_statement( not_error->structs.arith_error->into.go_to );
-      }
-    ELSE
-      {
-      }
-      ENDIF
-    }
   if( error )
     {
     SHOW_PARSE
@@ -4240,7 +4412,7 @@ parser_set_envar( const struct cbl_refer_t &name,
   }
 
 void
-parser_accept_date_yymmdd( struct cbl_field_t *target )
+parser_accept_date_yymmdd( const cbl_refer_t& refer )
   {
   Analyze();
   SHOW_PARSE
@@ -4249,11 +4421,14 @@ parser_accept_date_yymmdd( struct cbl_field_t *target )
     SHOW_PARSE_END
     }
 
+  auto target = refer.field;
   CHECK_FIELD(target);
 
   gg_call(VOID,
           "__gg__get_date_yymmdd",
           gg_get_address_of(target->var_decl_node),
+          refer_offset(refer),
+          refer_size_dest(refer),
           NULL_TREE);
   TRACE1
     {
@@ -4264,7 +4439,7 @@ parser_accept_date_yymmdd( struct cbl_field_t *target )
   }
 
 void
-parser_accept_date_yyyymmdd( struct cbl_field_t *target )
+parser_accept_date_yyyymmdd( const cbl_refer_t& refer )
   {
   Analyze();
   SHOW_PARSE
@@ -4272,9 +4447,12 @@ parser_accept_date_yyyymmdd( struct cbl_field_t *target )
     SHOW_PARSE_HEADER
     SHOW_PARSE_END
     }
+  auto target = refer.field;
   gg_call(VOID,
           "__gg__get_date_yyyymmdd",
           gg_get_address_of(target->var_decl_node),
+          refer_offset(refer),
+          refer_size_dest(refer),
           NULL_TREE);
   TRACE1
     {
@@ -4285,7 +4463,7 @@ parser_accept_date_yyyymmdd( struct cbl_field_t *target )
   }
 
 void
-parser_accept_date_yyddd( struct cbl_field_t *target )
+parser_accept_date_yyddd( const cbl_refer_t& refer )
   {
   Analyze();
   SHOW_PARSE
@@ -4294,11 +4472,14 @@ parser_accept_date_yyddd( struct cbl_field_t *target )
     SHOW_PARSE_END
     }
 
+  auto target = refer.field;
   CHECK_FIELD(target);
 
   gg_call(VOID,
           "__gg__get_date_yyddd",
           gg_get_address_of(target->var_decl_node),
+          refer_offset(refer),
+          refer_size_dest(refer),
           NULL_TREE);
   TRACE1
     {
@@ -4309,7 +4490,7 @@ parser_accept_date_yyddd( struct cbl_field_t *target )
   }
 
 void
-parser_accept_date_yyyyddd( struct cbl_field_t *target )
+parser_accept_date_yyyyddd( const cbl_refer_t& refer )
   {
   Analyze();
   SHOW_PARSE
@@ -4318,11 +4499,14 @@ parser_accept_date_yyyyddd( struct cbl_field_t *target )
     SHOW_PARSE_END
     }
 
+  auto target = refer.field;
   CHECK_FIELD(target);
 
   gg_call(VOID,
           "__gg__get_yyyyddd",
           gg_get_address_of(target->var_decl_node),
+          refer_offset(refer),
+          refer_size_dest(refer),
           NULL_TREE);
   TRACE1
     {
@@ -4333,7 +4517,7 @@ parser_accept_date_yyyyddd( struct cbl_field_t *target )
   }
 
 void
-parser_accept_date_dow( struct cbl_field_t *target )
+parser_accept_date_dow( const cbl_refer_t& refer )
   {
   Analyze();
   SHOW_PARSE
@@ -4342,11 +4526,14 @@ parser_accept_date_dow( struct cbl_field_t *target )
     SHOW_PARSE_END
     }
 
+  auto target = refer.field;
   CHECK_FIELD(target);
 
   gg_call(VOID,
           "__gg__get_date_dow",
           gg_get_address_of(target->var_decl_node),
+          refer_offset(refer),
+          refer_size_dest(refer),
           NULL_TREE);
   TRACE1
     {
@@ -4357,7 +4544,7 @@ parser_accept_date_dow( struct cbl_field_t *target )
   }
 
 void
-parser_accept_date_hhmmssff( struct cbl_field_t *target )
+parser_accept_date_hhmmssff( const cbl_refer_t& refer )
   {
   Analyze();
   SHOW_PARSE
@@ -4366,11 +4553,14 @@ parser_accept_date_hhmmssff( struct cbl_field_t *target )
     SHOW_PARSE_END
     }
 
+  auto target = refer.field;
   CHECK_FIELD(target);
 
   gg_call(VOID,
           "__gg__get_date_hhmmssff",
           gg_get_address_of(target->var_decl_node),
+          refer_offset(refer),
+          refer_size_dest(refer),
           NULL_TREE);
   TRACE1
     {
@@ -4391,16 +4581,16 @@ parser_accept_date_hhmmssff( struct cbl_field_t *target )
  */
 
 void
-parser_alphabet( const cbl_alphabet_t& alphabet )
+parser_alphabet( const cbl_alphabet_t *alphabet )
   {
   Analyze();
   SHOW_PARSE
     {
     SHOW_PARSE_HEADER
-    char *psz = xasprintf(" %s ", alphabet.name);
+    char *psz = xasprintf(" %s ", alphabet->name);
     SHOW_PARSE_TEXT(psz);
     free(psz);
-    switch(alphabet.encoding)
+    switch(alphabet->encoding)
       {
       case iconv_CP1252_e:
         psz = xasprintf("CP1252");
@@ -4418,10 +4608,10 @@ parser_alphabet( const cbl_alphabet_t& alphabet )
         psz = xasprintf("UTF8");
         break;
       case custom_encoding_e:
-        psz = xasprintf("%s", alphabet.name);
+        psz = xasprintf("%s", alphabet->name);
         break;
       default:
-        { const char * p = __gg__encoding_iconv_name( alphabet.encoding );
+        { const char * p = __gg__encoding_iconv_name( alphabet->encoding );
           psz = xasprintf("%s", p? p : "[unknown]");
         }
       }
@@ -4431,7 +4621,7 @@ parser_alphabet( const cbl_alphabet_t& alphabet )
     SHOW_PARSE_END
     }
 
-  switch(alphabet.encoding)
+  switch(alphabet->encoding)
     {
     case iconv_CP1252_e:
     case ASCII_e:
@@ -4442,7 +4632,7 @@ parser_alphabet( const cbl_alphabet_t& alphabet )
 
     case custom_encoding_e:
       {
-      uint64_t alphabet_index = symbol_unique_index(symbol_elem_of(&alphabet));
+      uint64_t alphabet_index = symbol_unique_index(symbol_elem_of(alphabet));
 
       unsigned char ach[256];
 
@@ -4453,21 +4643,21 @@ parser_alphabet( const cbl_alphabet_t& alphabet )
         // character i has the ordinal alphabet[i]
         unsigned char ch = i;
 
-        ach[ch] = (alphabet.collation_sequence[i]);
+        ach[ch] = (alphabet->collation_sequence[i]);
         gg_assign(  gg_array_value(table256, ch),
-                    build_int_cst_type(UCHAR, (alphabet.collation_sequence[i])) );
+                    build_int_cst_type(UCHAR, (alphabet->collation_sequence[i])) );
         }
 
-      unsigned int low_char  = alphabet.low_char;
-      unsigned int high_char = alphabet.high_char;
-      __gg__alphabet_create(alphabet.encoding,
+      unsigned int low_char  = alphabet->low_char;
+      unsigned int high_char = alphabet->high_char;
+      __gg__alphabet_create(alphabet->encoding,
                             alphabet_index,
                             ach,
                             low_char,
                             high_char);
       gg_call(VOID,
               "__gg__alphabet_create",
-              build_int_cst_type(INT, alphabet.encoding),
+              build_int_cst_type(INT, alphabet->encoding),
               build_int_cst_type(SIZE_T, alphabet_index),
               gg_pointer_to_array(table256),
               build_int_cst_type(INT, low_char),
@@ -4484,16 +4674,16 @@ parser_alphabet( const cbl_alphabet_t& alphabet )
   }
 
 void
-parser_alphabet_use( cbl_alphabet_t& alphabet )
+parser_alphabet_use( const cbl_alphabet_t *alphabet )
   {
   Analyze();
   SHOW_PARSE
     {
     SHOW_PARSE_HEADER
-    char *psz = xasprintf(" %s ", alphabet.name);
+    char *psz = xasprintf(" %s ", alphabet->name);
     SHOW_PARSE_TEXT(psz);
     free(psz);
-    switch(alphabet.encoding)
+    switch(alphabet->encoding)
       {
       case iconv_CP1252_e:
         psz = xasprintf("CP1252");
@@ -4511,7 +4701,7 @@ parser_alphabet_use( cbl_alphabet_t& alphabet )
         psz = xasprintf("UTF8");
         break;
       case custom_encoding_e:
-        psz = xasprintf("%s", alphabet.name);
+        psz = xasprintf("%s", alphabet->name);
         break;
       default:
         gcc_unreachable();
@@ -4521,11 +4711,11 @@ parser_alphabet_use( cbl_alphabet_t& alphabet )
     SHOW_PARSE_END
     }
 
-  uint64_t alphabet_index = symbol_unique_index(symbol_elem_of(&alphabet));
+  uint64_t alphabet_index = symbol_unique_index(symbol_elem_of(alphabet));
 
   current_function->alphabet_in_use = true;
 
-  switch(alphabet.encoding)
+  switch(alphabet->encoding)
     {
     default:
       gcc_unreachable();
@@ -4540,7 +4730,7 @@ parser_alphabet_use( cbl_alphabet_t& alphabet )
               "__gg__alphabet_use",
               build_int_cst_type(INT, current_encoding(display_encoding_e)),
               build_int_cst_type(INT, current_encoding(national_encoding_e)),
-              build_int_cst_type(INT, alphabet.encoding),
+              build_int_cst_type(INT, alphabet->encoding),
               null_pointer_node,
               NULL_TREE);
       break;
@@ -4557,7 +4747,7 @@ parser_alphabet_use( cbl_alphabet_t& alphabet )
               "__gg__alphabet_use",
               build_int_cst_type(INT, current_encoding(display_encoding_e)),
               build_int_cst_type(INT, current_encoding(national_encoding_e)),
-              build_int_cst_type(INT, alphabet.encoding),
+              build_int_cst_type(INT, alphabet->encoding),
               build_int_cst_type(SIZE_T, alphabet_index),
               NULL_TREE);
       break;
@@ -4609,9 +4799,9 @@ parser_display_internal(tree file_descriptor,
     TRACE1
       {
       gg_create_true_false_statement_lists(refer.field->var_decl_node);
-        gg_fprintf(file_descriptor, 0, "TRUE");
+        gg_fprintf(trace_handle, 0, "TRUE");
       ELSE
-        gg_fprintf(file_descriptor, 0, "FALSE");
+        gg_fprintf(trace_handle, 0, "FALSE");
       ENDIF
       }
     }
@@ -4838,7 +5028,7 @@ parser_display( const struct cbl_special_name_t *upon,
       }
     TRACE1_END
     }
-  tree file_descriptor = gg_define_int();
+  tree file_descriptor = NULL_TREE;
   bool needs_closing = false;
   if( upon )
     {
@@ -4849,7 +5039,7 @@ parser_display( const struct cbl_special_name_t *upon,
       case STDIN_e:
       case SYSIN_e:
       case SYSIPT_e:
-        cbl_internal_error("Attempting to send to an input device.");
+        cbl_internal_error("%s", "Attempting to send to an input device.");
         break;
 
       case C01_e:
@@ -4872,19 +5062,19 @@ parser_display( const struct cbl_special_name_t *upon,
       case S05_e:
       case AFP_5A_e:
       case ARG_VALUE_e:
-        cbl_internal_error("Not valid for DISPLAY statement.");
+        cbl_internal_error("%s", "Not valid for DISPLAY statement.");
         break;
 
       case STDOUT_e:
       case CONSOLE_e:
         // These are inarguably stdout
-        gg_assign(file_descriptor, integer_one_node);
+        file_descriptor = integer_one_node;
         break;
 
       case STDERR_e:
       case SYSERR_e:
         // These are inarguably stderr
-        gg_assign(file_descriptor, integer_two_node);
+        file_descriptor = integer_two_node;
         break;
 
       case SYSOUT_e:
@@ -4896,6 +5086,7 @@ parser_display( const struct cbl_special_name_t *upon,
         // formerly-ubiquitous card punches no longer exist, there is a need
         // for the possibility of assigning these "devices" to externally-
         // determined Unix gadgetry in /dev:
+        file_descriptor = gg_define_variable(INT);
         gg_assign(file_descriptor,
                   gg_call_expr( INT,
                                 "__gg__get_file_descriptor",
@@ -4910,6 +5101,7 @@ parser_display( const struct cbl_special_name_t *upon,
         // descriptor.
         if( !getenv("ASSEMBLER") )
           {
+          file_descriptor = gg_define_variable(INT);
           gg_assign(file_descriptor,
                     gg_call_expr( INT,
                                   "__gg__get_file_descriptor",
@@ -4958,7 +5150,7 @@ parser_display( const struct cbl_special_name_t *upon,
   else
     {
     // stdout is file descriptor 1.
-    gg_assign(file_descriptor, integer_one_node);
+    file_descriptor = integer_one_node;
     }
 
   for(size_t i=0; i<n-1; i++)
@@ -5065,8 +5257,7 @@ void
 parser_exhibit( bool /*changed*/, bool /*named*/,
                 const std::vector<cbl_refer_t> &args )
   {
-  tree file_descriptor = gg_define_int();
-  gg_assign(file_descriptor, integer_one_node);   // stdout is file descriptor 1.
+  tree file_descriptor = integer_one_node;   // stdout is file descriptor 1.
 
   for(size_t i=0; i<args.size(); i++)
     {
@@ -5131,7 +5322,7 @@ parser_assign( size_t nC, cbl_num_result_t *C,
       }
     }
 
-  tree error_flag = gg_define_int(0);
+  tree error_flag = gg_define_variable(INT, 0L);
 
   for(size_t i=0; i<nC; i++ )
     {
@@ -5458,16 +5649,10 @@ parser_initialize_table(size_t nelem,
     }
   typedef size_t span_t[2];
   static_assert(sizeof(spans[0]) == sizeof(span_t), "pair size wrong");
-  tree tspans = gg_define_variable(SIZE_T_P);
-  tree ttbls  = gg_define_variable(SIZE_T_P);
-
-  gg_assign(tspans,
-            build_array_of_size_t(2*nspan,
-                                  reinterpret_cast<const size_t *>(spans)));
-  gg_assign(ttbls,
-            build_array_of_size_t(2*ntbl,
-                                  reinterpret_cast<const size_t *>(tbls)));
-
+  tree tspans = build_array_of_size_t(2*nspan,
+                                     reinterpret_cast<const size_t *>(spans));
+  tree ttbls = build_array_of_size_t(2*ntbl,
+                                     reinterpret_cast<const size_t *>(tbls));
   gg_call(VOID,
           "__gg__mirror_range",
           build_int_cst_type(SIZE_T, nelem),
@@ -5479,9 +5664,6 @@ parser_initialize_table(size_t nelem,
           build_int_cst_type(SIZE_T, ntbl),
           ttbls,
           NULL_TREE);
-
-  gg_free(tspans);
-  gg_free(ttbls);
   }
 
 static void
@@ -5530,6 +5712,7 @@ is_valuable( cbl_field_type_t type ) {
 
 void parser_sleep(const cbl_refer_t &seconds)
   {
+  RETURN_IF_PARSE_ONLY;
   if( seconds.field )
     {
     gg_get_address_of(seconds.field->var_decl_node);
@@ -5568,8 +5751,8 @@ parser_exit_program()
 
 static
 void
-program_end_stuff(cbl_refer_t refer,
-                  ec_type_t ec)
+program_end_stuff(const cbl_refer_t &refer,
+                        ec_type_t    ec)
   {
   // Looking for hijack here puts the hijacked code just before the
   // exit sequence
@@ -5599,39 +5782,18 @@ program_end_stuff(cbl_refer_t refer,
   if( returner )
     {
     cbl_field_type_t field_type = returner->type;
-    size_t nbytes = 0;
-    tree return_type = tree_type_from_field_type(returner,
-                                                 nbytes);
-    tree retval   = gg_define_variable(return_type);
-
-    gg_assign(retval, gg_cast(return_type, integer_zero_node));
 
     if( is_valuable( field_type ) )
       {
-      // The field being returned is numeric.
-      if(     field_type == FldNumericBin5
-          ||  field_type == FldFloat
-          ||  field_type == FldPointer
-          ||  field_type == FldIndex )
-        {
-        // These are easily handled because they are all little-endian.
-        gg_memcpy(gg_get_address_of(retval),
-                  member(returner, "data"),
-                  build_int_cst_type( SIZE_T,
-                                      std::min(nbytes, (size_t)returner->data.capacity())));
-        }
-      else
-        {
-        // The field_type has a PICTURE string, so we need to convert from the
-        // COBOL form to little-endian binary:
-        tree value;
-        get_binary_value( value, returner, INT128);
-        gg_memcpy(gg_get_address_of(retval),
-                  gg_get_address_of(value),
-                  build_int_cst_type(SIZE_T, nbytes));
-        }
+      tree inside_type  = tree_type_from_field(returner);
+      tree outside_type = get_interfunction_type(inside_type);
+      tree outside      = gg_define_variable(outside_type);
+      tree value        = get_binary_value(returner, inside_type);
+      safe_store(gg_get_address_of(outside),
+                 outside_type,
+                 value);
       restore_local_variables();
-      gg_return(retval);
+      gg_return(outside);
       }
     else
       {
@@ -5643,12 +5805,12 @@ program_end_stuff(cbl_refer_t refer,
 
       tree array_type = build_array_type_nelts(UCHAR,
                                     returner->data.capacity());
-      tree array     =  gg_define_variable(array_type, vs_static);
+      tree array =  gg_define_variable(array_type, vs_static);
       gg_memcpy(gg_pointer_to_array(array),
                 member(returner->var_decl_node, "data"),
                 member(returner->var_decl_node, "capacity"));
 
-      tree actual = gg_cast(COBOL_FUNCTION_RETURN_TYPE,
+      tree actual = gg_cast(COBOL_FUNCTION_RETURN_64,
                             gg_pointer_to_array(array));
 
       restore_local_variables();
@@ -5659,19 +5821,18 @@ program_end_stuff(cbl_refer_t refer,
     {
     // There is no explicit value.  This means, by default (according to IBM),
     // we return the value found in RETURN-CODE:
-    tree value = gg_define_variable(COBOL_FUNCTION_RETURN_TYPE);
+    tree value;
     if( !hijacked )
       {
-      gg_assign(value,
-                gg_cast(COBOL_FUNCTION_RETURN_TYPE,
-                        current_function->var_decl_return));
+      value = gg_cast(COBOL_FUNCTION_RETURN_64,
+                        current_function->var_decl_return);
       }
     else
       {
-      gg_assign(value, gg_cast(COBOL_FUNCTION_RETURN_TYPE, integer_zero_node));
+      value = gg_cast(COBOL_FUNCTION_RETURN_64, integer_zero_node);
       }
     restore_local_variables();
-    gg_return(gg_cast(COBOL_FUNCTION_RETURN_TYPE, value));
+    gg_return(value);
     }
   }
 
@@ -5803,6 +5964,10 @@ walk_initialization(cbl_field_t *field, bool initialized, bool deallocate)
           }
         }
       first_time = false;
+
+      // We need to propagate the based_e attribute:
+      cbl_field_of(&element)->attr |= based_e;
+
       if( this_one->level == 00 )
         {
         // Ignore LEVEL00 "INDEXED BY" variables
@@ -6030,25 +6195,25 @@ parser_xml_parse( cbl_label_t *instance,
   // With the callback in place, we are ready to call the library:
   tree pcallback = gg_get_function_address(VOID, ach);
 
-  tree erc = gg_define_int();
-  gg_assign(erc, gg_call_expr(INT,
-                              "__gg__xml_parse",
-                              gg_get_address_of(input.field->var_decl_node),
-                              refer_offset(input),
-                              refer_size_source(input),
-                              encoding ?
-                                  gg_get_address_of(encoding->var_decl_node)
-                                : null_pointer_node,
-                              validating ?
-                                  gg_get_address_of(validating->var_decl_node)
-                                : null_pointer_node,
-                              build_int_cst_type(INT, returns_national),
-                              pcallback,
-                              gg_get_address_of(xml_event->var_decl_node),
-                              gg_get_address_of(xml_code ->var_decl_node),
-                              gg_get_address_of(xml_text ->var_decl_node),
-                              NULL_TREE));
-  IF( erc, ne_op, integer_zero_node )
+  IF( gg_call_expr(INT,
+                   "__gg__xml_parse",
+                   gg_get_address_of(input.field->var_decl_node),
+                   refer_offset(input),
+                   refer_size_source(input),
+                   encoding ?
+                       gg_get_address_of(encoding->var_decl_node)
+                     : null_pointer_node,
+                   validating ?
+                       gg_get_address_of(validating->var_decl_node)
+                     : null_pointer_node,
+                   build_int_cst_type(INT, returns_national),
+                   pcallback,
+                   gg_get_address_of(xml_event->var_decl_node),
+                   gg_get_address_of(xml_code ->var_decl_node),
+                   gg_get_address_of(xml_text ->var_decl_node),
+                   NULL_TREE),
+      ne_op,
+      integer_zero_node )
     {
     //gg_printf("__gg__xml_parse() failed with erc %d\n", erc, NULL_TREE);
     gg_append_statement(instance->structs.xml_parse->exception.go_to);
@@ -6309,29 +6474,15 @@ establish_using(size_t nusing,
       // This code is relevant at compile time.  It takes each
       // expected formal parameter and tacks it onto the end of the
       // function's arguments chain.
-
       char *ach = xasprintf("_p_%s", args[i].refer.field->name);
-
-      size_t nbytes = 0;
-      tree par_type = tree_type_from_field_type(args[i].refer.field, nbytes);
-      if( par_type == FLOAT )
+      tree par_type;
+      if( args[i].crv == by_value_e )
         {
-        if( nbytes == 16 )
-          {
-          par_type = INT128;
-          }
-        else
-          {
-          par_type = SSIZE_T;
-          }
+        par_type = tree_type_from_refer(args[i].refer);
         }
-      if( par_type == DOUBLE )
+      else
         {
-        par_type = SSIZE_T;
-        }
-      if( par_type == FLOAT128 )
-        {
-        par_type = INT128;
+        par_type = VOID_P;
         }
       chain_parameter_to_function(current_function->function_decl, par_type, ach);
       free(ach);
@@ -6389,10 +6540,9 @@ establish_using(size_t nusing,
     // There are 'nusing' elements in the PROCEDURE DIVISION USING list.
 
     tree parameter = NULL_TREE;
-    tree rt_i = gg_define_int();
     for(size_t i=0; i<nusing; i++)
       {
-      // And this compiler code generates run-time execution code. The
+      // And this generates run-time execution code. The
       // generated code picks up, at run time, the variable we just
       // established in the chain at compile time.
 
@@ -6444,7 +6594,7 @@ establish_using(size_t nusing,
         // The passed parameter, if it exists, is a pointer to a COBOL
         // variable's data area
         tree reference = gg_define_variable(UCHAR_P);
-        gg_assign(rt_i, build_int_cst_type(INT, i));
+        tree rt_i = build_int_cst_type(INT, i);
         IF( rt_i, lt_op , var_decl_call_parameter_count )
           {
           if( i == 0 )
@@ -6466,8 +6616,7 @@ establish_using(size_t nusing,
                       // gg_array_value(var_decl_call_parameter_lengths, rt_i),
                       // NULL_TREE);
 
-            // Get the length from the global lengths[] side channel.  Don't
-            // forget to use the length mask on the table value.
+            // Get the length from the global lengths[] side channel.
             gg_assign(member(args[i].refer.field->var_decl_node, "capacity"),
                       gg_array_value(var_decl_call_parameter_lengths, rt_i));
             }
@@ -6477,6 +6626,37 @@ establish_using(size_t nusing,
           gg_assign(reference, gg_cast(UCHAR_P, null_pointer_node));
           }
         ENDIF
+        if(     cobol_target_big_endian()  // cppcheck-suppress knownConditionTrueFalse
+            &&  (    args[i].refer.field->type == FldNumericBin5
+                  || args[i].refer.field->type == FldNumericBinary) )
+          {
+          // We have another thing to think about.  The reference we are
+          // processing might have come from an intermediate, and those are
+          // sixteen-byte values.  On a little-endian machine we can just use
+          // the value as-is, because the extra zeroes are to the right of the
+          // one we need.  But a big endian sixteen-byte value has a bunch of
+          // leading zeroes, and we need to skip past them.
+
+          // Pick up the length metadata.
+
+          // That value is probably sixteen.  Subtract the length of our target
+          // value from that.
+          tree offset =
+            gg_subtract(gg_array_value(var_decl_call_parameter_lengths, rt_i),
+                       member(args[i].refer.field->var_decl_node, "capacity"));
+          // And add that value to 'reference'
+          gg_assign(reference,
+                    gg_add(reference, offset));
+          // This code was added when I encountered a function call using
+          // func( N - 1 ), where the function expected a single-byte value.
+          // In little-endian, no problem, because the calculated value of 3
+          // produced a sixteen-byte 0x03 00 00 00.....  But in big-endian,
+          // the sixteen bytes are 0x00 00 00 00 ... 00 03.  The above
+          // calculation starts with sixteen, subtracts one from it to get
+          // fifteen, and then adds fifteen to 'reference' to point to the
+          // 0x03.
+          }
+
         // 'parameter' is a reference, so it it becomes the data member of
         // the cblc_field_t COBOL variable.
         gg_assign(member(args[i].field()->var_decl_node, "data"), reference);
@@ -6488,24 +6668,12 @@ establish_using(size_t nusing,
 
       if( crv == by_value_e )
         {
-        size_t nbytes;
-        tree_type_from_field_type(new_var, nbytes);
-        tree parm = gg_define_variable(INT128);
-
-        tree value_type;
-        if( nbytes == 16 )
-          {
-          value_type = INT128;
-          }
-        else
-          {
-          value_type = SSIZE_T;
-          }
+        tree value_type = tree_type_from_field(new_var);
 
         // 'parameter' is the 64-bit or 128-bit value that was placed on the stack
         tree value = gg_define_variable(value_type);
 
-        gg_assign(rt_i, build_int_cst_type(INT, i));
+        tree rt_i = build_int_cst_type(INT, i);
         IF( rt_i, lt_op , var_decl_call_parameter_count )
           {
           if( i == 0 )
@@ -6518,10 +6686,9 @@ establish_using(size_t nusing,
             // These are subsequent parameters
             parameter = TREE_CHAIN(parameter);
             }
-          gg_assign(value, gg_cast(value_type, parameter));
           gg_memcpy(gg_get_address_of(value),
                     gg_get_address_of(parameter),
-                    build_int_cst_type(SIZE_T, nbytes));
+                    build_int_cst_type(SIZE_T, gg_sizeof(value)));
 
           if( args[i].refer.field->attr & any_length_e )
             {
@@ -6542,41 +6709,8 @@ establish_using(size_t nusing,
           }
         ENDIF
 
-        if( nbytes <= 8 )
-          {
-          // Our input is a 64-bit number
-          if( new_var->attr & signable_e )
-            {
-            IF( gg_bitwise_and( gg_cast(SIZE_T, value),
-                                build_int_cst_type(SIZE_T, 0x8000000000000000ULL)),
-                ne_op,
-                gg_cast(SIZE_T, integer_zero_node) )
-              {
-              // Our input is a negative number.  Set it to -1, so that the
-              // eight high-order bytes are 0xFF
-              gg_assign(parm, gg_cast(INT128, integer_minus_one_node));
-              }
-            ELSE
-              {
-              // Our input is a positive number, so set it to zero, so that
-              // the eight high-order bytes are 0x00
-              gg_assign(parm, gg_cast(INT128, integer_zero_node));
-              }
-            ENDIF
-            }
-          else
-            {
-            // This is a 64-bit positive number: so set it to zero, so that
-              // the eight high-order bytes are 0x00
-            gg_assign(parm, gg_cast(INT128, integer_zero_node));
-            }
-          }
-
-        // Now copy over the little-endian binary bytes, either 8 or 16 as
-        // necessary
-        gg_memcpy(gg_get_address_of(parm),
-                  gg_get_address_of(value),
-                  build_int_cst_type(SIZE_T, nbytes));
+        // Because new_var is linkage, at this point it has no data area. We
+        // need to create that data area.
         tree array_type = build_array_type_nelts(UCHAR, new_var->data.capacity());
         tree data_decl_node = gg_define_variable( array_type,
                                                   NULL,
@@ -6584,12 +6718,21 @@ establish_using(size_t nusing,
         gg_assign( member(new_var->var_decl_node, "data"),
                           gg_pointer_to_array(data_decl_node) );
 
-        // And then move it into place
-        gg_call(VOID,
-                "__gg__assign_value_from_stack",
-                gg_get_address_of(new_var->var_decl_node),
-                parm,
-                NULL_TREE);
+        // And then put 'value' into place:
+        if( new_var->type == FldFloat )
+          {
+          gg_memcpy(member(new_var->var_decl_node, "data"),
+                    gg_get_address(value),
+                    build_int_cst_type(SIZE_T, new_var->data.capacity()));
+          }
+        else
+          {
+          gg_call(VOID,
+                  "__gg__assign_value_from_stack",
+                  gg_get_address_of(new_var->var_decl_node),
+                  gg_cast(INT128, value),
+                  NULL_TREE);
+          }
         // We now have to handle an oddball situation.  It's possible we are
         // dealing with
         //
@@ -6736,20 +6879,22 @@ parser_division(cbl_division_t division,
       tree prog_list = gg_define_variable(build_pointer_type(CHAR_P),
                                           ach, vs_file_static);
 
-      // Likewise, we need a pointer to the array of pointers to functions:
+      // Likewise, we need a pointer to the first element of an array
+      // of pointers to functions:
       tree function_type =
-        build_varargs_function_type_array( SIZE_T,
-                                           0,     // No parameters yet
-                                           NULL); // And, hence, no types
-      tree pointer_type = build_pointer_type(function_type);
-      tree constructed_array_type = build_array_type_nelts(pointer_type, 1);
+        build_varargs_function_type_array(SIZE_T,
+                                          0,
+                                          NULL);
+      tree function_pointer_type = build_pointer_type(function_type);
+
       sprintf(ach,
               "..accessible_program_pointers_" HOST_SIZE_T_PRINT_DEC,
               (fmt_size_t)current_function->our_symbol_table_index);
-      tree prog_pointers = gg_define_variable(
-                                      build_pointer_type(constructed_array_type),
-                                      ach,
-                                      vs_file_static);
+
+      tree prog_pointers =
+        gg_define_variable(build_pointer_type(function_pointer_type),
+                           ach,
+                           vs_file_static);
       gg_call(VOID,
               "__gg__set_program_list",
               build_int_cst_type(INT, current_function->our_symbol_table_index),
@@ -6770,7 +6915,7 @@ parser_division(cbl_division_t division,
       tree globals_are_initialized = gg_declare_variable( INT,
                                                           "__gg__globals_are_initialized",
                                                           NULL,
-                                                          vs_external_reference);
+                                                          vs_extern);
       IF( globals_are_initialized, eq_op, integer_zero_node )
         {
         // one-time initialization happens here
@@ -6796,13 +6941,12 @@ parser_division(cbl_division_t division,
 
     gg_append_statement(current_function->skip_init_label);
     // This is where we check to see if somebody tried to cancel us
-    tree cancelled = gg_define_int();
-    gg_assign(cancelled,
-              gg_call_expr( INT,
-                            "__gg__is_canceled",
-                            current_function->function_address,
-                            NULL_TREE));
-    IF( cancelled, ne_op, integer_zero_node )
+    IF( gg_call_expr( INT,
+                      "__gg__is_canceled",
+                      current_function->function_address,
+                      NULL_TREE),
+        ne_op,
+        integer_zero_node )
       {
       // Somebody flagged us for CANCEL, which means reinitialization, so we
       // need to find the _INITIALIZE_PROGRAM section label.
@@ -6833,7 +6977,9 @@ parser_division(cbl_division_t division,
 
       size_t nbytes = 0;
       tree returning_type = tree_type_from_field_type(returning, nbytes);
-      gg_modify_function_type(current_function->function_decl, returning_type);
+      tree interfunction_type = get_interfunction_type(returning_type);
+
+      gg_modify_function_type(current_function->function_decl, interfunction_type);
       }
 
     // Stash the returning variables for use during parser_return()
@@ -7198,20 +7344,12 @@ parser_relop_long(cbl_field_t *tgt,
           tgt->name);
     }
 
-  tree tree_a  = build_int_cst_type(LONG, avalue);
-  tree tree_b;
-  get_binary_value( tree_b, bref.field, LONG);
-  tree comp_res = gg_define_variable(LONG);
-  gg_assign(comp_res, gg_subtract(tree_a, tree_b));
-
-  // comp_res is negative, zero, position for less-than, equal-to, greater-than
-
-  // So, we simply compare the result of the comparison to zero using the relop
-  // we were given to turn it into a TRUE/FALSE
-  gg_assign(  tgt->var_decl_node,
-              gg_build_relational_expression( comp_res,
-                                            relop,
-                                            gg_cast(LONG, integer_zero_node)));
+  tree tree_a = build_int_cst_type(LONG, avalue);
+  tree tree_b = get_binary_value(bref.field, LONG);
+  gg_assign(tgt->var_decl_node,
+            gg_build_relational_expression(tree_a,
+                                           relop,
+                                           tree_b));
   TRACE1
     {
     TRACE1_INDENT
@@ -7317,7 +7455,7 @@ parser_see_stop_run(struct cbl_refer_t exit_status,
   if( exit_status.field )
     {
     // There is an exit_status, so it wins:
-    get_binary_value( returned_value, exit_status.field, INT);
+    returned_value = get_binary_value(exit_status.field, INT);
     TRACE1
       {
       TRACE1_REFER(" exit_status ", exit_status, "")
@@ -8206,6 +8344,7 @@ perform_inline_until(   struct cbl_perform_tgt_t *tgt,
                   GOTO TOP
       EXIT:
   */
+  gg_append_statement(tgt->addresses.testA.label);
   gg_append_statement(tgt->addresses.test.label);
 
   // Go to where the conditional is recalculated....
@@ -8558,7 +8697,7 @@ perform_inline_testafter_varying(  struct cbl_perform_tgt_t *tgt,
   // the list of statements:
   gg_append_statement(tgt->addresses.top.go_to);
 
-  // The list of statements ends with a goto TESTA, and that;s here:
+  // The list of statements ends with a goto TESTA, and that's here:
   gg_append_statement(tgt->addresses.testA.label);
 
   // Build the test section
@@ -8744,8 +8883,7 @@ parser_perform_inline_times(struct cbl_perform_tgt_t *tgt,
     SHOW_PARSE_END
     }
 
-  tree initial_value;
-  get_binary_value(initial_value, how_many, LONG);
+  tree initial_value = get_binary_value(how_many, LONG);
   gg_assign(counter, initial_value);
 
   SHOW_PARSE
@@ -8918,7 +9056,7 @@ parser_file_add(struct cbl_file_t *file)
   gg_variable_scope_t scope;
   if( file->attr & external_e )
     {
-    scope = vs_external;
+    scope = vs_weak;
     }
   else
     {
@@ -9055,7 +9193,7 @@ parser_file_add(struct cbl_file_t *file)
           "__gg__file_init",
           gg_get_address_of(new_var_decl),
           gg_string_literal(file->name),
-          build_int_cst_type(ULONGLONG, symbol_table_index),
+          build_int_cst_type(UINT64, symbol_table_index),
           array_of_keys,
           key_numbers,
           unique_flags,
@@ -9147,18 +9285,38 @@ parser_file_open( struct cbl_file_t *file, int mode_char )
     TRACE1_END
     }
 
-  tree pszFilename = gg_define_char_star();
+
+  /*
+   * The filename of a cbl_file_t may be found in three places:
+   * 1.  As before, in the cbl_field_t indexed by cbl_file_t::filename.
+   * 2.  Now, in the cbl_special_name_t indexed by cbl_file_t::device.
+   * 3.  As ever, in neither, from the environment.
+   *
+   * If both filename and device are nonzero and not FldForward, the filename
+   * supersedes. The syntax was
+   *     SELECT fd-name ASSIGN TO device-name USING filename
+   * That just creates in the parser an alias of device-name to fd-name.  It's
+   * still the same file and does *not* change the device characteristics.
+   *
+   * If filename is FldForward (or 0) and device is nonzero, the OS filename is
+   * taken from cbl_special_name_t::os_filename.  It is tiny, hard-coded name
+   * in /dev.
+   *
+   * --jkl
+   */
+
+  tree pszFilename;
   cbl_field_t *field_of_name = symbol_field_forward(file->filename);
   if( field_of_name->type == FldForward )
     {
     // The target of ASSIGN TO was unquoted, but didn't resolve to a
     // cbl_field_t.  This means that the name of the field is an
     // environment variable that will hold the file name
-    gg_assign(pszFilename, gg_strdup(gg_string_literal(field_of_name->name)));
+    pszFilename = gg_strdup(gg_string_literal(field_of_name->name));
     }
   else
     {
-    gg_assign(pszFilename, gg_cast(CHAR_P, null_pointer_node));
+    pszFilename = gg_cast(CHAR_P, null_pointer_node);
     }
 
   sv_is_i_o = true;
@@ -9334,7 +9492,29 @@ parser_file_write( cbl_file_t *file,
                    bool sequentially
                  )
   {
-  Analyze();
+  RETURN_IF_PARSE_ONLY;
+  if( !file )
+    {
+    cbl_internal_error("%s: called with NULL *file", __func__);
+    }
+
+  if( !file->var_decl_node )
+    {
+    cbl_internal_error("%s: for %s called with NULL %<file->var_decl_node%>",
+                        __func__, file->name);
+    }
+
+  if( !file )
+    {
+    cbl_internal_error("%s: called with NULL *field", __func__);
+    }
+
+  if( !file->var_decl_node )
+    {
+    cbl_internal_error( "%s: for %s called with NULL %<field->var_decl_node%>",
+                        __func__,
+                        file->name);
+    }
 
   bool is_random = !(   file->access == file_access_seq_e
                      || file->access == file_inaccessible_e);
@@ -9383,35 +9563,10 @@ parser_file_write( cbl_file_t *file,
     SHOW_PARSE_END
     }
 
-  if( !file )
-    {
-    cbl_internal_error("%s: called with NULL *file", __func__);
-    }
-
-  if( !file->var_decl_node )
-    {
-    cbl_internal_error("%s: for %s called with NULL %<file->var_decl_node%>",
-                        __func__, file->name);
-    }
-
-  if( !file )
-    {
-    cbl_internal_error("%s: called with NULL *field", __func__);
-    }
-
-  if( !file->var_decl_node )
-    {
-    cbl_internal_error( "%s: for %s called with NULL %<field->var_decl_node%>",
-                        __func__,
-                        file->name);
-    }
-
-  tree t_advance = gg_define_variable(INT);
+  tree t_advance;
   if(advance.field)
     {
-    tree value;
-    get_binary_value( value, advance, INT);
-    gg_assign(t_advance, gg_cast(INT, value));
+    t_advance = get_binary_value(advance, INT);
     }
   else
     {
@@ -9421,15 +9576,18 @@ parser_file_write( cbl_file_t *file,
       // MicroFocus and GnuCOBOL say the default is BEFORE advancing.
       // See the comment where the variable is defined:
       after = auto_advance_is_AFTER_advancing;
-      gg_assign(t_advance, integer_one_node);
+      t_advance = integer_one_node;
       }
     else
       {
       // The default for SEQUENTIAL is no vertical motion
-      gg_assign(t_advance, integer_minusone_node);
+      t_advance = integer_minusone_node;
       }
     }
 
+  // Dubner sez:  I don't understand the following sequence.  I need to learn
+  // if the record_area can legitimately be null and need a default, or if the
+  // follow-up if( !record_area ) is unnecessary.
   gcc_assert(record_area);
   if( !record_area )
     {
@@ -9483,7 +9641,7 @@ parser_file_delete( struct cbl_file_t *file, bool /*sequentially*/ )
 
   if( !file )
     {
-    cbl_internal_error("The file pointer should not be null");
+    cbl_internal_error("%s", "The file pointer should not be null");
     abort();  // Because cppcheck doesn't recognize [[noerror]]
     }
 
@@ -9572,22 +9730,21 @@ parser_file_delete_file( cbl_label_t *name,
     SHOW_PARSE_END
     }
   set_up_delete_file_label(name);
-  tree there_was_an_error = gg_define_int(0);
+  tree there_was_an_error = gg_define_variable(INT, 0L);
   for(size_t i=0; i<filenames.size(); i++)
     {
-    tree pszFilename = gg_define_char_star();
+    tree pszFilename;
     cbl_field_t *field_of_name = symbol_field_forward(filenames[i]->filename);
     if( field_of_name->type == FldForward )
       {
       // The target of ASSIGN TO was unquoted, but didn't resolve to a
       // cbl_field_t.  This means that the name of the field is an
       // environment variable that will hold the file name
-      gg_assign(pszFilename,
-                gg_strdup(gg_string_literal(field_of_name->name)));
+      pszFilename = gg_strdup(gg_string_literal(field_of_name->name));
       }
     else
       {
-      gg_assign(pszFilename, gg_cast(CHAR_P, null_pointer_node));
+      pszFilename = gg_cast(CHAR_P, null_pointer_node);
       }
     gg_assign(there_was_an_error,
               gg_bitwise_or(there_was_an_error,
@@ -9612,6 +9769,7 @@ parser_file_delete_file( cbl_label_t *name,
     // There was an error detected.
     gg_append_statement(name->structs.delete_file->exception.go_to);
     }
+  ENDIF
   }
 
 void
@@ -9660,7 +9818,8 @@ parser_file_rewrite(cbl_file_t *file,
                     cbl_field_t *record_area,
                     bool sequentially )
   {
-  Analyze();
+
+
   if(    file->org    == file_indexed_e
       && file->access == file_access_seq_e
       && !sequentially )
@@ -9688,6 +9847,7 @@ parser_file_rewrite(cbl_file_t *file,
     SHOW_PARSE_END
     }
 
+  // See comment about gcc_assert(record_area); in parser_file_write().
   gcc_assert(record_area);
   if( !record_area )
     {
@@ -9797,7 +9957,7 @@ parser_file_start(struct cbl_file_t *file,
     }
   else if( flk > 0 )
     {
-    get_binary_value( length, length_ref, SIZE_T);
+    length = get_binary_value(length_ref, SIZE_T);
     }
 
   sv_is_i_o = true;
@@ -9916,24 +10076,11 @@ inspect_tally(bool backward,
   // all the integers and cbl_inspect_bound_t values, in a strict sequence so
   // that the library routine can peel them off.
 
-  tree int_size = gg_define_variable(INT, integer_zero_node);
-  tree integers = gg_define_variable(SIZE_T_P, null_pointer_node);
-
   size_t n_integers = int_index;
 
-  IF( build_int_cst_type(INT, n_integers), gt_op, int_size )
-    {
-    gg_assign(int_size, build_int_cst_type(INT, n_integers));
-    gg_assign(integers,
-              gg_cast(SIZE_T_P,
-                      gg_realloc(integers,
-                                 n_integers
-                                 * int_size_in_bytes(VOID_P))));
-    }
-  ELSE
-    {
-    }
-  ENDIF
+  tree array_type = build_array_type_nelts(SIZE_T, n_integers);
+  tree integer_array = gg_define_variable(array_type);
+  tree integers = gg_pointer_to_array(integer_array);
 
   const size_t n_resolveds = pcbl_index;
   std::vector<cbl_refer_t> pcbl_refers(n_resolveds);
@@ -10091,22 +10238,9 @@ inspect_replacing(int backward,
                         + operations[0].nbound()  // Room for all the cbl_inspect_bound_t values
                         + n_all_leading_first;  // Room for all of the  n_identifier_3  counts
 
-  tree int_size = gg_define_variable(INT, integer_zero_node);
-  tree integers = gg_define_variable(SIZE_T_P, null_pointer_node);
-
-  IF( build_int_cst_type(INT, n_integers), gt_op, int_size )
-    {
-    gg_assign(int_size, build_int_cst_type(INT, n_integers));
-    gg_assign(integers,
-              gg_cast(SIZE_T_P,
-                      gg_realloc(integers,
-                                 n_integers
-                                 * int_size_in_bytes(VOID_P))));
-    }
-  ELSE
-    {
-    }
-  ENDIF
+  tree array_type = build_array_type_nelts(SIZE_T, n_integers);
+  tree integer_array = gg_define_variable(array_type);
+  tree integers = gg_pointer_to_array(integer_array);
 
   const size_t n_resolveds =  1                 // Room for identifier-1
                             + n_id_3            // Room for the identifier-3 variables
@@ -10222,12 +10356,26 @@ inspect_replacing(int backward,
   tree params = build_array_of_referlets(pcbl_index, pcbl_refers.data());
 
   // Do the actual call:
-  gg_call(VOID,
-          "__gg__inspect_format_2",
-          backward ? integer_one_node : integer_zero_node,
-          integers,
-          params,
-          NULL_TREE);
+  charmap_t *charmap = __gg__get_charmap(identifier_1.field->codeset.encoding);
+  if( charmap->stride() == 1 && !charmap->is_like_utf8() )
+    {
+    // The variables are ASCII or EBCDIC
+    gg_call(VOID,
+            "__gg__inspect_format_2_sbc",
+            backward ? integer_one_node : integer_zero_node,
+            integers,
+            params,
+            NULL_TREE);
+    }
+  else
+    {
+    gg_call(VOID,
+            "__gg__inspect_format_2",
+            backward ? integer_one_node : integer_zero_node,
+            integers,
+            params,
+            NULL_TREE);
+    }
   }
 
 void
@@ -10270,8 +10418,19 @@ parser_inspect_conv(cbl_refer_t input,
     SHOW_PARSE_END
     }
 
+  const char *format_4;
+  charmap_t *charmap = __gg__get_charmap(input.field->codeset.encoding);
+  if( charmap->stride() == 1 && !charmap->is_like_utf8() )
+    {
+    format_4 = "__gg__inspect_format_4_sbc";
+    }
+  else
+    {
+    format_4 = "__gg__inspect_format_4";
+    }
+
   gg_call(CHAR_P,
-          "__gg__inspect_format_4",
+          format_4,
           backward ? integer_one_node : integer_zero_node,
           input.field ? gg_get_address_of(input.field->var_decl_node)
                       : null_pointer_node,
@@ -10682,8 +10841,7 @@ parser_intrinsic_call_1( cbl_field_t *tgt,
 
     if( is_table(ref1.field) && !ref1.nsubscript() )
       {
-      static tree depending_on = gg_define_variable(LONG, "..pic1_dep");
-      depending_on_value(depending_on, ref1.field);
+      tree depending_on = depending_on_value(ref1.field);
       gg_call(VOID,
               "__gg__int128_to_field",
               gg_get_address_of(tgt->var_decl_node),
@@ -10798,8 +10956,7 @@ handle_gg_trim(cbl_field_t *tgt,
           }
         else
           {
-          tree location;
-          get_location(location, arg);
+          tree location = get_location(arg);
           gg_assign(gg_indirect(char_p), gg_indirect(location));
           }
         gg_increment(char_p);
@@ -10830,8 +10987,9 @@ parser_trim( cbl_field_t *tgt,
   gcc_assert(how >= 1 && how <= 3);
   if( !handle_gg_trim(tgt, input, how, args) )
     {
+    // We know stride is bigger than 1.
     cbl_encoding_t encoding = input.field->codeset.encoding;
-    charmap_t *charmap = __gg__get_charmap(encoding);
+    const charmap_t *charmap = __gg__get_charmap(encoding);
     int stride = charmap->stride();
     tree tstride = build_int_cst_type(SIZE_T, stride);
 
@@ -10850,17 +11008,25 @@ parser_trim( cbl_field_t *tgt,
                                           (arg.field->attr & FIGCONST_MASK);
       if( figconst )
         {
-        uint8_t figcst = charmap->figconst_character(figconst);
-        tree tfigcst = build_int_cst_type(ULONG, figcst);
+        char space[] = " ";
+        *space = char_from_figconst(figconst);
 
+        // Convert that character to the encoded version:
+        size_t nbytes;
+        const char *converted =  __gg__iconverter(DEFAULT_SOURCE_ENCODING,
+                                                  encoding,
+                                                  space,
+                                                  1,
+                                                  &nbytes);
+        // And add it to the array:
         gg_memcpy(char_p,
-                  gg_get_address_of(tfigcst),
-                  tstride );
+                  build_string_literal(stride, converted),
+                  tstride);
         }
       else
         {
-        tree location;
-        get_location(location, arg);
+        // It's not a figurative constant, so we get our value from 'arg'
+        tree location = get_location(arg);
         gg_memcpy(char_p,
                   location,
                   tstride);
@@ -11042,9 +11208,8 @@ static void
 field_increment(cbl_field_t *fld )
   {
   // rdigits has to be zero.
-  tree value;
-  get_binary_value(value, fld, INT128);
-  gg_increment(value);
+  tree value = get_binary_value(fld, INT128);
+  gg_increment2(value);
   gg_call(VOID,
           "__gg__int128_to_field",
           gg_get_address_of(fld->var_decl_node),
@@ -11124,8 +11289,7 @@ parser_lsearch_start(   cbl_label_t *name,
     if( is_table(current) )
       {
       // Extract the number of elements in that rightmost dimension.
-      lsearch->limit = gg_define_variable(LONG);
-      depending_on_value(lsearch->limit, current);
+      lsearch->limit = depending_on_value(current);
       break;
       }
     current = parent_of(current);
@@ -11137,11 +11301,11 @@ parser_lsearch_start(   cbl_label_t *name,
   tree value;
   if(varying)
     {
-    get_binary_value(value, varying, SIZE_T);
+    value = get_binary_value(varying, SIZE_T);
     }
   else if( index )
     {
-    get_binary_value(value, index, SIZE_T);
+    value = get_binary_value(index, SIZE_T);
     }
   else
     {
@@ -11370,7 +11534,7 @@ parser_bsearch_start(   cbl_label_t* name,
 
   // Assign the left and right values:
   gg_assign(bsearch->left, build_int_cst_type(LONG, 1));
-  depending_on_value(bsearch->right, current);
+  gg_assign(bsearch->right, depending_on_value(current));
 
   // We now jump to the top of the binary testing loop, which comes right
   // after the labels where we handle non-equal cases:
@@ -11575,19 +11739,79 @@ parser_bsearch_end( cbl_label_t* name )
   }
 
 tree
-gg_array_of_field_pointers( size_t N,
-                            cbl_field_t **fields )
+gg_array_of_field_pointers( const std::vector<const cbl_field_t *> &fields )
   {
-  tree retval = gg_define_variable(build_pointer_type(cblc_field_p_type_node));
-  gg_assign(retval, gg_cast(build_pointer_type(cblc_field_p_type_node),
-                            gg_malloc(build_int_cst_type(SIZE_T,
-                                                         N * int_size_in_bytes(VOID_P)))));
-  for(size_t i=0; i<N; i++)
+  size_t N = fields.size();
+  gcc_assert(N);
+
+  tree const_field_pointer_type =
+    build_qualified_type( cblc_field_p_type_node,
+                          TYPE_QUAL_CONST );
+
+  tree array_type =
+    build_array_type_nelts( const_field_pointer_type, N );
+
+  vec<constructor_elt, va_gc> *elts = NULL;
+  vec_alloc( elts, N );
+
+  for( size_t i=0; i<N; i++ )
     {
-    gg_assign(gg_array_value(retval, i), gg_get_address_of(fields[i]->var_decl_node));
+    tree field_pointer = fields[i] && fields[i]->var_decl_node
+                       ? gg_get_address_of( fields[i]->var_decl_node)
+                       : null_pointer_node;
+
+    field_pointer = gg_cast( cblc_field_p_type_node, field_pointer );
+
+    CONSTRUCTOR_APPEND_ELT( elts,
+                            bitsize_int( i ),
+                            field_pointer );
     }
-  return retval;
+
+  tree constr = build_constructor( array_type, elts );
+
+  tree retval = gg_define_variable( array_type );
+
+  TREE_READONLY( retval ) = 1;
+  DECL_INITIAL( retval ) = constr;
+
+  return gg_pointer_to_array(retval);
   }
+
+tree
+gg_array_of_uchar_p( const std::vector<tree> &uchar_p )
+  {
+  size_t N = uchar_p.size();
+  if( !N )
+    {
+    return null_pointer_node;
+    }
+
+  tree const_uchar_p_type =
+    build_qualified_type( UCHAR_P,
+                          TYPE_QUAL_CONST );
+
+  tree array_type =
+    build_array_type_nelts( const_uchar_p_type, N );
+
+  vec<constructor_elt, va_gc> *elts = NULL;
+  vec_alloc( elts, N );
+
+  for( size_t i=0; i<N; i++ )
+    {
+    CONSTRUCTOR_APPEND_ELT( elts,
+                            bitsize_int( i ),
+                            uchar_p[i] );
+    }
+
+  tree constr = build_constructor( array_type, elts );
+  tree retval = gg_define_variable( array_type );
+  TREE_READONLY( retval ) = 1;
+  DECL_INITIAL( retval ) = constr;
+
+  // Return a pointer to the first element:
+  return gg_pointer_to_array(retval);
+  }
+
 
 static void
 push_program_state()
@@ -11631,50 +11855,36 @@ parser_sort(cbl_refer_t tableref,
             __func__,
             tableref.field->name);
     }
-  size_t total_keys = std::accumulate( keys.begin(), keys.end(), 0,
-                                       [](size_t n, const cbl_key_t& key ) {
-                                         return n + key.fields.size();
-                                       } );
-  typedef const cbl_field_t * const_field_t;
-  const_field_t *flattened_fields =
-     static_cast<const_field_t *>(xmalloc(total_keys * sizeof(cbl_field_t *)));
-  gcc_assert(flattened_fields);
-  size_t *flattened_ascending =
-                   static_cast<size_t *>(xmalloc(total_keys * sizeof(size_t)));
-  gcc_assert(flattened_ascending);
 
-  size_t key_index = 0;
+  std::vector<const cbl_field_t *>flattened_fields_2;
+  std::vector<size_t>flattened_ascending_2;
   for( size_t i=0; i<keys.size(); i++ )
     {
     for( size_t j=0; j<keys[i].fields.size(); j++ )
       {
-      flattened_fields[key_index]    = keys[i].fields[j];
-      flattened_ascending[key_index] = keys[i].ascending ? 1 : 0;
-      key_index += 1;
+      flattened_fields_2.push_back(keys[i].fields[j]);
+      flattened_ascending_2.push_back(keys[i].ascending ? 1 : 0);
       }
     }
 
-  // Create the array of cbl_field_t pointers for the keys
-  tree all_keys = gg_array_of_field_pointers( total_keys,
-                                              const_cast<cbl_field_t**>(flattened_fields));
+  tree all_keys = gg_array_of_field_pointers(flattened_fields_2);
 
   // Create the array of integers that are the flags for ASCENDING:
-  tree ascending = gg_array_of_size_t( total_keys, flattened_ascending );
+  tree ascending = gg_array_of_size_t(flattened_ascending_2 );
 
-  tree depending_on = gg_define_variable(LONG, "_sort_size");
-  depending_on_value(depending_on, table);
+  tree depending_on = depending_on_value(table);
 
   if( alphabet )
     {
     push_program_state();
-    parser_alphabet_use(*alphabet);
+    parser_alphabet_use(alphabet);
     }
   gg_call(VOID,
           "__gg__sort_table",
           gg_get_address_of(tableref.field->var_decl_node),
           refer_offset(tableref),
           gg_cast(SIZE_T, depending_on),
-          build_int_cst_type(SIZE_T, key_index),
+          build_int_cst_type(SIZE_T, flattened_fields_2.size()),
           all_keys,
           ascending,
           duplicates ? integer_one_node : integer_zero_node,
@@ -11683,12 +11893,6 @@ parser_sort(cbl_refer_t tableref,
     {
     pop_program_state();
     }
-
-  free(flattened_ascending);
-  free(flattened_fields);
-
-  gg_free(ascending);
-  gg_free(all_keys);
   }
 
 void
@@ -11740,7 +11944,9 @@ parser_file_sort(   cbl_file_t *workfile,
     for(size_t i=0; i<ninput; i++)
       {
       parser_file_open(inputs[i], 'r');
-      IF( member(workfile, "io_status"), ge_op, build_int_cst_type(INT, FsEofSeq) )
+      IF( member(inputs[i], "io_status"),
+          ge_op,
+          build_int_cst_type(INT, FsEofSeq) )
         {
         gg_printf("Couldn't open the SORT USING file for input\n", NULL_TREE);
         gg_exit(integer_one_node);
@@ -11772,35 +11978,22 @@ parser_file_sort(   cbl_file_t *workfile,
   // clone of the code for handling multiple keys, each of which can have
   // multiple fields.
 
-  size_t total_keys = std::accumulate( keys.begin(), keys.end(), 0,
-                                       []( size_t n, const cbl_key_t& key ) {
-                                         return n + key.fields.size();
-                                       } );
-  typedef const cbl_field_t * const_field_t;
-  auto flattened_fields
-   = static_cast<const_field_t *>(xmalloc(total_keys * sizeof(cbl_field_t *)));
-  gcc_assert(flattened_fields);
-  size_t *flattened_ascending =
-                   static_cast<size_t *>(xmalloc(total_keys * sizeof(size_t)));
-  gcc_assert(flattened_ascending);
-
-  size_t key_index = 0;
+  std::vector<const cbl_field_t *>flattened_fields_2;
+  std::vector<size_t>flattened_ascending_2;
   for( size_t i=0; i<keys.size(); i++ )
     {
     for( size_t j=0; j<keys[i].fields.size(); j++ )
       {
-      flattened_fields[key_index]    = keys[i].fields[j];
-      flattened_ascending[key_index] = keys[i].ascending ? 1 : 0;
-      key_index += 1;
+      flattened_fields_2.push_back(keys[i].fields[j]);
+      flattened_ascending_2.push_back(keys[i].ascending ? 1 : 0);
       }
     }
 
   // Create the array of cbl_field_t pointers for the keys
-  tree all_keys = gg_array_of_field_pointers( total_keys,
-                                              const_cast<cbl_field_t**>(flattened_fields));
+  tree all_keys = gg_array_of_field_pointers(flattened_fields_2);
 
   // Create the array of integers that are the flags for ASCENDING:
-  tree ascending = gg_array_of_size_t( total_keys, flattened_ascending );
+  tree ascending = gg_array_of_size_t(flattened_ascending_2 );
 
   // We need to open the workfile for the sorting routine:
   parser_file_open(workfile, 'r');
@@ -11815,12 +12008,12 @@ parser_file_sort(   cbl_file_t *workfile,
   if( alphabet )
     {
     push_program_state();
-    parser_alphabet_use(*alphabet);
+    parser_alphabet_use(alphabet);
     }
   gg_call(VOID,
           "__gg__sort_workfile",
           gg_get_address_of(workfile->var_decl_node),
-          build_int_cst_type(SIZE_T, key_index),
+          build_int_cst_type(SIZE_T, flattened_fields_2.size()),
           all_keys,
           ascending,
           duplicates ? integer_one_node : integer_zero_node,
@@ -11830,11 +12023,6 @@ parser_file_sort(   cbl_file_t *workfile,
     pop_program_state();
     }
   parser_file_close(workfile);
-
-  free(flattened_ascending);
-  free(flattened_fields);
-  gg_free(ascending);
-  gg_free(all_keys);
 
   // The workfile is sorted.  We move to Phase 3 -- transferring the workfile
   // to the output.
@@ -11867,7 +12055,7 @@ parser_file_sort(   cbl_file_t *workfile,
       gg_call(VOID,
               "__gg__file_sort_ff_output",
               gg_get_address_of(outputs[i]->var_decl_node),
-              gg_get_address_of(workfile->var_decl_node),
+              gg_get_address_of(workfile->  var_decl_node),
               NULL_TREE);
       parser_file_close(outputs[i]);
       parser_file_close(workfile);
@@ -12087,8 +12275,8 @@ static tree
 gg_array_of_file_pointers(  size_t N,
                             cbl_file_t **files )
   {
-  tree retval = gg_define_variable(build_pointer_type(cblc_file_p_type_node));
-  gg_assign(retval, gg_cast(  build_pointer_type(cblc_file_p_type_node),
+  tree retval = gg_define_variable(cblc_file_pp_type_node);
+  gg_assign(retval, gg_cast(  cblc_file_pp_type_node,
                               gg_malloc(  build_int_cst_type(SIZE_T,
                                                              N * int_size_in_bytes(VOID_P)))));
   for(size_t i=0; i<N; i++)
@@ -12100,7 +12288,7 @@ gg_array_of_file_pointers(  size_t N,
 
 void
 parser_file_merge(  cbl_file_t *workfile,
-                    cbl_alphabet_t *alphabet,
+              const cbl_alphabet_t *alphabet,
                     const std::vector<cbl_key_t>& keys,
                     size_t ninputs,
                     cbl_file_t **inputs,
@@ -12124,37 +12312,22 @@ parser_file_merge(  cbl_file_t *workfile,
                 build_int_cst_type(INT, file_sequential_e));
     }
 
-  size_t total_keys = std::accumulate( keys.begin(), keys.end(), 0,
-                                       []( size_t i, const cbl_key_t& key ) {
-                                         return i + key.fields.size();
-                                       } );
-  typedef const cbl_field_t * const_field_t;
-  const_field_t *flattened_fields
-                 = static_cast<const_field_t *>
-                   (xmalloc(total_keys * sizeof(cbl_field_t *)));
-  gcc_assert(flattened_fields);
-  size_t *flattened_ascending
-            = static_cast<size_t *>(xmalloc(total_keys * sizeof(size_t)));
-  gcc_assert(flattened_ascending);
-
-  size_t key_index = 0;
+  std::vector<const cbl_field_t *>flattened_fields_2;
+  std::vector<size_t>flattened_ascending_2;
   for( size_t i=0; i<keys.size(); i++ )
     {
     for( size_t j=0; j<keys[i].fields.size(); j++ )
       {
-      flattened_fields[key_index]    = keys[i].fields[j];
-      flattened_ascending[key_index] = keys[i].ascending ? 1 : 0;
-      key_index += 1;
+      flattened_fields_2.push_back(keys[i].fields[j]);
+      flattened_ascending_2.push_back(keys[i].ascending ? 1 : 0);
       }
     }
 
   // Create the array of cbl_field_t pointers for the keys
-  tree all_keys = gg_array_of_field_pointers(
-                                 total_keys,
-                                 const_cast<cbl_field_t**>(flattened_fields));
+  tree all_keys =  gg_array_of_field_pointers(flattened_fields_2);
 
   // Create the array of integers that are the flags for ASCENDING:
-  tree ascending = gg_array_of_size_t(total_keys, flattened_ascending);
+  tree ascending = gg_array_of_size_t(flattened_ascending_2 );
 
   tree all_files = gg_array_of_file_pointers(ninputs, inputs);
 
@@ -12212,16 +12385,15 @@ parser_file_merge(  cbl_file_t *workfile,
       ENDIF
     }
 
-  cbl_field_t *sd_record = symbol_file_record(workfile);
   if( alphabet )
     {
     push_program_state();
-    parser_alphabet_use(*alphabet);
+    parser_alphabet_use(alphabet);
     }
   gg_call(VOID,
           "__gg__merge_files",
           gg_get_address_of(workfile->var_decl_node),
-          build_int_cst_type(SIZE_T, keys.size()),
+          build_int_cst_type(SIZE_T, flattened_fields_2.size()),
           all_keys,
           ascending,
           build_int_cst_type(SIZE_T, ninputs),
@@ -12231,11 +12403,6 @@ parser_file_merge(  cbl_file_t *workfile,
     {
     pop_program_state();
     }
-
-  free(flattened_ascending);
-  free(flattened_fields);
-  gg_free(ascending);
-  gg_free(all_keys);
 
   parser_file_close(workfile);
   for(size_t i=0; i<ninputs; i++)
@@ -12291,7 +12458,6 @@ parser_file_merge(  cbl_file_t *workfile,
               "__gg__file_sort_ff_output",
               gg_get_address_of(outputs[i]->var_decl_node),
               gg_get_address_of(workfile->  var_decl_node),
-              gg_get_address_of(sd_record-> var_decl_node),
               NULL_TREE);
       parser_file_close(outputs[i]);
       parser_file_close(workfile);
@@ -12411,7 +12577,7 @@ parser_unstring(cbl_refer_t src,
   tree ref_delimiters = build_array_of_referlets(noutputs,   delimiters);
   tree ref_counts     = build_array_of_referlets(noutputs,   counts);
 
-  tree t_overflow = gg_define_int();
+  tree t_overflow = gg_define_variable(INT);
   gg_assign(t_overflow,
             gg_call_expr( INT,
                           "__gg__unstring",
@@ -12527,14 +12693,12 @@ parser_string(const cbl_refer_t& tgt,
   tree pintegers = build_array_of_size_t( index_int, integers);
   tree referlets = build_array_of_referlets(index_cblc, refers.data());
 
-  tree t_overflow = gg_define_int();
+  tree t_overflow = gg_define_variable(INT);
   gg_assign(t_overflow, gg_call_expr( INT,
                                       "__gg__string",
                                       pintegers,
                                       referlets,
                                       NULL_TREE));
-  gg_free(pintegers);
-
   free(integers);
 
   if( overflow )
@@ -12629,6 +12793,8 @@ parser_call_exception_end( cbl_label_t *name )
   gg_append_statement( name->structs.call_exception->bottom.go_to );
   }
 
+
+
 static
 void
 create_and_call(size_t narg,
@@ -12642,6 +12808,8 @@ create_and_call(size_t narg,
   // We have a good function handle, so we are going to create a call
   tree *arguments = NULL;
   int  *allocated = NULL;
+
+  tree interfunction_type = get_interfunction_type(returned_value_type);
 
   if(narg)
     {
@@ -12662,16 +12830,25 @@ create_and_call(size_t narg,
       crv = by_value_e;
       }
 
-    if( args[i].attr == address_of_e || args[i].refer.addr_of )
+    if(    args[i].attr == address_of_e
+        || args[i].attr == length_of_e
+        || args[i].refer.addr_of )
       {
-      // ADDRESS OF has to be passed by value.
+      // These have to be passed to be passed by value.
       crv = by_value_e;
+      }
+    else if(   crv == by_value_e
+            && args[i].refer.field->type == FldAlphanumeric
+            && (args[i].refer.field->attr & FIGCONST_MASK) != zero_value_e )
+      {
+      // Maybe passing an alphanumeric BY VALUE should be a syntax error?
+      crv = by_content_e;
       }
 
     allocated[i] = 0;
 
-    tree location = gg_define_variable(UCHAR_P, "..location.1", vs_stack);
-    tree length   = gg_define_variable(SIZE_T,  "..length.1",   vs_stack);
+    tree location = gg_define_variable(UCHAR_P);
+    tree length   = gg_define_variable(SIZE_T);
 
     if( !args[i].refer.field )
       {
@@ -12688,7 +12865,8 @@ create_and_call(size_t narg,
         {
         crv = by_content_e;
         gg_assign(location,
-                  gg_cast(UCHAR_P, build_string_literal(args[i].refer.field->data.capacity(),
+                  gg_cast(UCHAR_P,
+                     build_string_literal(args[i].refer.field->data.capacity(),
                                        args[i].refer.field->data.original())));
         gg_assign(length,
                   build_int_cst_type( SIZE_T,
@@ -12727,50 +12905,23 @@ create_and_call(size_t narg,
 
       case by_content_e:
         {
-        if(    (args[i].refer.field->attr & intermediate_e)
-            && is_valuable(args[i].refer.field->type) )
-          {
-          cbl_unimplemented("CALL USING BY CONTENT <temporary> would require "
-                            "REPOSITORY PROTOTYPES.");
-          }
-
         // BY CONTENT means that the called program gets a copy of the data.
-
         // We'll free this copy after the called program returns.
 
         switch(args[i].attr)
           {
           case address_of_e:
-            {
-            // Allocate the memory, and make the copy:
-            arguments[i] = gg_define_char_star();
-            allocated[i] = 1;
-            gg_assign(arguments[i], gg_malloc(length) ) ;
-            gg_memcpy(arguments[i],
-                      location,
-                      length);
-            break;
-            }
-
           case length_of_e:
             {
-            // The BY CONTENT LENGTH OF gets passed as an 64-bit big-endian
-            // value
-            arguments[i] = gg_define_size_t();
-            allocated[i] = 1;
-            gg_assign(arguments[i], gg_malloc(length) ) ;
-            gg_call(VOID,
-                    "__gg__copy_as_big_endian",
-                    gg_get_address_of(arguments[i]),
-                    length,
-                    NULL_TREE);
+            // Up above, we converted these to by_value_e
+            gcc_unreachable();
             break;
             }
 
           case none_of_e:
             {
             // Allocate the memory, and make the copy:
-            arguments[i] = gg_define_char_star();
+            arguments[i] = gg_define_variable(CHAR_P);
             allocated[i] = 1;
             gg_assign(arguments[i], gg_cast(CHAR_P, gg_malloc(length))) ;
             gg_memcpy(arguments[i], location, length);
@@ -12782,9 +12933,8 @@ create_and_call(size_t narg,
 
       case by_value_e:
         {
-        // For BY VALUE, we take whatever we've been given and do our best to
-        // make a 64-bit value out of it, although we move to 128 bits when
-        // necessary.
+        // For BY VALUE, we take whatever we've been given and make a INT128
+        // out of it if necessary, and either LONG or ULONG otherwise.
 
         cbl_ffi_arg_attr_t attr = args[i].attr;
         if( args[i].refer.addr_of )
@@ -12796,71 +12946,25 @@ create_and_call(size_t narg,
           {
           case address_of_e:
             {
-            arguments[i] = gg_define_size_t();
+            arguments[i] = gg_define_variable(SIZE_T);
             gg_assign(arguments[i], gg_cast(SIZE_T, location ));
-            gg_assign(length, build_int_cst_type(SIZE_T, 8));
+            gg_assign(length, build_int_cst_type(SIZE_T, gg_sizeof(CHAR_P)));
             break;
             }
 
           case length_of_e:
             {
-            arguments[i] = gg_define_size_t();
+            arguments[i] = gg_define_variable(SIZE_T);
             gg_assign(arguments[i], gg_cast(SIZE_T, length));
-            gg_assign(length, build_int_cst_type(SIZE_T, 8));
+            gg_assign(length, build_int_cst_type(SIZE_T, gg_sizeof(CHAR_P)));
             break;
             }
 
           case none_of_e:
             {
-            assert(args[i].refer.field);
-            bool as_int128 = false;
-            if( !(args[i].refer.field->attr & intermediate_e) )
-              {
-              // All temporaries are SIZE_T
-              if( args[i].refer.field->type == FldFloat )
-                {
-                as_int128 = true;
-                }
-              else if(   args[i].refer.field->type == FldNumericBin5
-                      && args[i].refer.field->data.digits   == 0
-                      && args[i].refer.field->data.capacity() == 16 )
-                {
-                as_int128 = true;
-                }
-              else if( args[i].refer.field->data.digits > 18 )
-                {
-                as_int128 = true;
-                }
-              }
-
-            if( as_int128 )
-              {
-              arguments[i] = gg_define_variable(INT128);
-              gg_assign(arguments[i],
-                        gg_cast(INT128,
-                                gg_call_expr(
-                                INT128,
-                                "__gg__fetch_call_by_value_value",
-                                gg_get_address_of(args[i].refer.field->var_decl_node),
-                                refer_offset(args[i].refer),
-                                refer_size_source(args[i].refer),
-                                NULL_TREE)));
-              gg_assign(length, build_int_cst_type(SIZE_T, 16));
-              }
-            else
-              {
-              arguments[i] = gg_define_size_t();
-              gg_assign(arguments[i],
-                        gg_cast(SIZE_T,
-                                gg_call_expr(
-                                INT128,
-                                "__gg__fetch_call_by_value_value",
-                                gg_get_address_of(args[i].refer.field->var_decl_node),
-                                refer_offset(args[i].refer),
-                                refer_size_source(args[i].refer),
-                                NULL_TREE)));
-              gg_assign(length, build_int_cst_type(SIZE_T, 8));
-              }
+            tree type = tree_type_from_refer(args[i].refer);
+            arguments[i] = gg_define_variable(type);
+            safe_assign(arguments[i], args[i].refer);
             break;
             }
           }
@@ -12884,21 +12988,20 @@ create_and_call(size_t narg,
     gg_assign(var_decl_call_parameter_signature,
               gg_cast(CHAR_P, function_pointer));
 
-    call_expr = gg_call_expr_list(returned_value_type,
+    call_expr = gg_call_expr_list(interfunction_type,
                                   function_pointer,
                                   narg,
                                   arguments );
     }
   else
     {
-    tree fndecl_type = build_varargs_function_type_array( returned_value_type,
+    tree fndecl_type = build_varargs_function_type_array( interfunction_type,
                        0,     // No parameters yet
                        NULL); // And, hence, no types
 
     // Fetch the FUNCTION_DECL for that FUNCTION_TYPE
     tree function_decl = gg_build_fn_decl(funcname, fndecl_type);
     set_call_convention(function_decl, current_call_convention());
-
     // Take the address of the function decl:
     tree address_of_function = gg_get_address_of(function_decl);
 
@@ -12911,7 +13014,7 @@ create_and_call(size_t narg,
 
     // Create the call_expr from that address
     call_expr = build_call_array_loc( gg_token_location(),
-                                      returned_value_type,
+                                      interfunction_type,
                                       address_of_function,
                                       narg,
                                       arguments);
@@ -12921,6 +13024,7 @@ create_and_call(size_t narg,
     // a list of call expressions whose function_decl targets will be replaced.
     parser_call_target( funcname, call_expr );
     }
+  call_expr = save_expr(call_expr);
 
   tree returned_value;
 
@@ -12930,12 +13034,13 @@ create_and_call(size_t narg,
     // we treat that returned value depends on the target.
 
     // Create a variable of the type expected from the called function
-    returned_value = gg_define_variable(returned_value_type);
+    //returned_value = gg_define_variable(interfunction_type);
 
     // Actually call the function, assigning the returned value to that
     // variable:
+    returned_value = gg_define_variable(interfunction_type);
     push_program_state();
-    gg_assign(returned_value, gg_cast(returned_value_type, call_expr));
+    gg_assign(returned_value, call_expr);
     pop_program_state();
 
     // Now we decided what to do with the returned value, based on its type.
@@ -12957,16 +13062,13 @@ create_and_call(size_t narg,
         TRACE1_END
         }
       }
-    else if(    returned_value_type == SSIZE_T
-            ||  returned_value_type == SIZE_T
-            ||  returned_value_type == INT128
-            ||  returned_value_type == UINT128)
+    else if( INTEGRAL_TYPE_P(returned_value_type) )
       {
       // We got back a 64-bit or 128-bit integer.  The called and calling
       // programs have to agree on size, but other than that, integer numeric
       // types are converted one to the other.
 
-      gg_call(VOID,
+      gg_call(INT,
               "__gg__int128_to_qualified_field",
               gg_get_address_of(returned.field->var_decl_node),
               refer_offset(returned),
@@ -12974,7 +13076,6 @@ create_and_call(size_t narg,
               gg_cast(INT128, returned_value),
               gg_cast(INT, member(returned.field->var_decl_node, "rdigits")),
               build_int_cst_type(INT, truncation_e),
-              null_pointer_node,
               NULL_TREE );
       TRACE1
         {
@@ -12987,13 +13088,9 @@ create_and_call(size_t narg,
             ||  returned_value_type == DOUBLE
             ||  returned_value_type == FLOAT128)
       {
-      tree returned_location = gg_define_uchar_star();
-      tree returned_length   = gg_define_size_t();
       // we were given a returned::field, so find its location and length:
-      gg_assign(returned_location,
-                qualified_data_location(returned));
-      gg_assign(returned_length,
-                refer_size_source(returned));
+      tree returned_location = qualified_data_location(returned);
+      tree returned_length = refer_size_source(returned);
 
       // We are doing float-to-float, and we require that those be identical
       // one the caller and callee sides.
@@ -13021,7 +13118,7 @@ create_and_call(size_t narg,
     {
     // There is no explicit location to assign the returned value.
     push_program_state();
-    if( dialect_ibm() )
+    if( dialect_ibm() || dialect_mf() || dialect_gnu() )
       {
       // Because no explicit returning value is expected, we call the
       // designated function and assign the return value to our RETURN-CODE.
@@ -13029,8 +13126,8 @@ create_and_call(size_t narg,
       }
     else
       {
-      // Because it is not IBM, we execute the called function and ignore the
-      // any returned value.
+      // Because it is not IBM/MF/GNU, we execute the called function and
+      // ignore any returned value.
       gg_append_statement(call_expr);
       }
     pop_program_state();
@@ -13051,6 +13148,133 @@ create_and_call(size_t narg,
     // We have an ON EXCEPT clause:
     gg_append_statement( not_except->structs.call_exception->into.go_to );
     }
+  }
+
+/* Cache one target-layout type and keep it reachable across GCC collections.
+   Dynamic root registration avoids requiring a new gengtype input file. */
+static tree literal_call_descriptor_type_node;
+
+static const struct ggc_root_tab literal_call_descriptor_roots[] =
+  {
+    { &literal_call_descriptor_type_node, 1, sizeof(tree),
+      &gt_ggc_mx_tree_node, &gt_pch_nx_tree_node },
+    LAST_GGC_ROOT_TAB
+  };
+
+static tree
+literal_call_descriptor_type()
+  {
+  if( literal_call_descriptor_type_node != NULL_TREE )
+    {
+    return literal_call_descriptor_type_node;
+    }
+
+  ggc_register_root_tab(literal_call_descriptor_roots);
+  tree record = make_node(RECORD_TYPE);
+  literal_call_descriptor_type_node = record;
+  TYPE_NAME(record) = get_identifier("cblc_literal_call_descriptor");
+
+  tree const_char_pointer
+    = build_pointer_type(build_qualified_type(char_type_node, TYPE_QUAL_CONST));
+  tree const_void_pointer
+    = build_pointer_type(build_qualified_type(void_type_node, TYPE_QUAL_CONST));
+
+#define GCOBOL_CALL_FIELD_NAME(name, c_type, tree_type) #name,
+  const char *names[] =
+    {
+    GCOBOL_LITERAL_CALL_DESCRIPTOR_FIELDS(GCOBOL_CALL_FIELD_NAME)
+    };
+#undef GCOBOL_CALL_FIELD_NAME
+#define GCOBOL_CALL_FIELD_TYPE(name, c_type, tree_type) tree_type,
+  tree types[] =
+    {
+    GCOBOL_LITERAL_CALL_DESCRIPTOR_FIELDS(GCOBOL_CALL_FIELD_TYPE)
+    };
+#undef GCOBOL_CALL_FIELD_TYPE
+
+  tree *next = &TYPE_FIELDS(record);
+  for( size_t i = 0; i < sizeof(types) / sizeof(types[0]); i++ )
+    {
+    tree member_decl = build_decl(UNKNOWN_LOCATION,
+                                  FIELD_DECL,
+                                  get_identifier(names[i]),
+                                  types[i]);
+    DECL_FIELD_CONTEXT(member_decl) = record;
+    *next = member_decl;
+    next = &DECL_CHAIN(member_decl);
+    }
+  *next = NULL_TREE;
+  layout_type(record);
+  return record;
+  }
+
+/* Emit a static initializer, not executable per-call assignments. */
+static tree
+literal_call_descriptor(const cbl_refer_t &name, bool issue_warning)
+  {
+  tree record = literal_call_descriptor_type();
+  tree literal = gg_string_literal(name.field->data.original());
+  tree field = gg_get_address_of(name.field->var_decl_node);
+  tree warning_filename = null_pointer_node;
+  tree program_id
+    = build_int_cst(INT, current_function->our_symbol_table_index);
+  tree call_convention = build_int_cst_type(INT, current_call_convention());
+  tree warning_line = integer_zero_node;
+
+  if( issue_warning )
+    {
+    warning_filename = gg_string_literal(current_filename.back().c_str());
+    warning_line = build_int_cst_type(INT, CURRENT_LINE_NUMBER);
+    }
+
+#define GCOBOL_CALL_FIELD_VALUE(name, c_type, tree_type) name,
+  tree values[] =
+    {
+    GCOBOL_LITERAL_CALL_DESCRIPTOR_FIELDS(GCOBOL_CALL_FIELD_VALUE)
+    };
+#undef GCOBOL_CALL_FIELD_VALUE
+
+  vec<constructor_elt, va_gc> *elts = NULL;
+  tree member_decl = TYPE_FIELDS(record);
+  for( size_t i = 0; i < sizeof(values) / sizeof(values[0]); i++ )
+    {
+    tree value = gg_cast(TREE_TYPE(member_decl), values[i]);
+    CONSTRUCTOR_APPEND_ELT(elts, member_decl, value);
+    member_decl = DECL_CHAIN(member_decl);
+    }
+  gcc_assert(member_decl == NULL_TREE);
+
+  tree initializer = build_constructor(record, elts);
+  gcc_assert(TREE_CONSTANT(initializer));
+  TREE_STATIC(initializer) = 1;
+
+  // vs_static supplies a unique name and roots the declaration in its function.
+  tree descriptor = gg_define_variable(record, vs_static);
+  TREE_READONLY(descriptor) = 1;
+  DECL_ARTIFICIAL(descriptor) = 1;
+  DECL_IGNORED_P(descriptor) = 1;
+  DECL_INITIAL(descriptor) = initializer;
+  return gg_get_address_of(descriptor);
+  }
+
+static tree
+function_pointer_for_literal_call(const cbl_refer_t &name,
+                                  tree function_return_type,
+                                  bool issue_warning)
+  {
+  tree function_type = build_varargs_function_type_array(
+                         function_return_type,
+                         0,
+                         NULL);
+  tree function_pointer_type = build_pointer_type(function_type);
+  tree descriptor = literal_call_descriptor(name, issue_warning);
+
+  return gg_cast(
+           function_pointer_type,
+           gg_call_expr(VOID_P,
+                        "__gg__resolve_literal_call_descriptor",
+                        descriptor,
+                        NULL_TREE));
   }
 
 void
@@ -13143,6 +13367,7 @@ parser_call(   cbl_refer_t name,
 
   size_t nbytes;
   tree returned_value_type = tree_type_from_field_type(returned.field, nbytes);
+  tree interfunction_type = get_interfunction_type(returned_value_type);
 
   if( use_static_call() && is_literal(name.field) )
     {
@@ -13158,7 +13383,7 @@ parser_call(   cbl_refer_t name,
   else if( name.field && name.field->type == FldPointer )
     {
     tree function_pointer = function_pointer_from_name( name,
-                                                        returned_value_type);
+                                                        interfunction_type);
     // This is call-by-pointer; we know function_pointer is good:
     create_and_call(narg,
                     args,
@@ -13170,9 +13395,23 @@ parser_call(   cbl_refer_t name,
     }
   else
     {
-    tree function_pointer = function_pointer_from_name( name,
-                                                      returned_value_type);
-    // We might not have a good handle, so we have to check:
+    const bool literal_call = name.field->type == FldLiteralA;
+    const bool issue_warning
+      = !except && !cdf_enabled_exceptions().match(ec_program_not_found_e);
+
+    tree function_pointer;
+    if( literal_call )
+      {
+      function_pointer = function_pointer_for_literal_call(name,
+                                                           interfunction_type,
+                                                           issue_warning);
+      }
+    else
+      {
+      function_pointer = function_pointer_from_name(name, interfunction_type);
+      }
+    function_pointer = save_expr(function_pointer);
+
     IF( function_pointer,
         ne_op,
         gg_cast(TREE_TYPE(function_pointer), null_pointer_node) )
@@ -13187,41 +13426,34 @@ parser_call(   cbl_refer_t name,
       }
     ELSE
       {
-      // We have a bad function pointer, which is the except condition:
-      parser_exception_raise(ec_program_not_found_e);
+      /* The literal resolver has already recorded lookup failure.
+         Variable-name calls retain their existing bookkeeping. */
+      if( !literal_call )
+        {
+        gg_call(VOID,
+                "__gg__set_exception_call",
+                gg_get_address_of(name.field->var_decl_node),
+                refer_offset(name),
+                NULL_TREE);
+        parser_exception_raise(ec_program_not_found_e);
+        }
+
       if( except )
         {
-        // We have an ON EXCEPT clause:
-        gg_append_statement( except->structs.call_exception->into.go_to );
-        // Because there is an ON EXCEPTION clause, suppress DECLARATIVE
-        // processing
+        // Preserve the existing ON EXCEPTION routing and reset placement.
+        gg_append_statement(except->structs.call_exception->into.go_to);
         gg_assign(var_decl_exception_code, integer_zero_node);
         }
-      else
+      else if( !literal_call && issue_warning )
         {
-        // When EC-PROGRAM-NOT-FOUND is not enabled, we issue a warning.
-        const cbl_enabled_exceptions_t&
-                                enabled_exceptions( cdf_enabled_exceptions() );
-        if( !enabled_exceptions.match(ec_program_not_found_e) )
-          {
-          tree mangled_name = gg_define_variable(CHAR_P);
-
-          gg_call(VOID,
-                  "__gg__just_mangle_name",
-                  (name.field->var_decl_node
-                                  ? gg_get_address_of(name.field->var_decl_node)
-                                  : null_pointer_node),
-                  gg_get_address_of(  mangled_name),
-                  NULL_TREE);
-
-          gg_printf("WARNING: %s:%d \"CALL %s\" not found"
-                    " with no \"CALL ON EXCEPTION\" phrase.\n"
-                    "(You might need -rdynamic or --export-dynamic for symbols in the executable.)\n",
-                    gg_string_literal(current_filename.back().c_str()),
-                    build_int_cst_type(INT, CURRENT_LINE_NUMBER),
-                    mangled_name,
-                    NULL_TREE);
-          }
+        gg_call(VOID,
+                "__gg__call_warning_message",
+                (name.field->var_decl_node
+                  ? gg_get_address_of(name.field->var_decl_node)
+                  : null_pointer_node),
+                gg_string_literal(current_filename.back().c_str()),
+                build_int_cst_type(INT, CURRENT_LINE_NUMBER),
+                NULL_TREE);
         }
       }
     ENDIF
@@ -13503,12 +13735,27 @@ parser_set_pointers( size_t ntgt, cbl_refer_t *tgts, cbl_refer_t source )
         && (source.field->type == FldAlphanumeric
             || source.field->type == FldLiteralA))
       {
-      // This is something like SET varp TO ENTRY "ref".
-      tree function_pointer = function_pointer_from_name(source,
-                                                   COBOL_FUNCTION_RETURN_TYPE);
-      gg_memcpy(qualified_data_location(tgts[i]),
-                gg_get_address_of(function_pointer),
-                sizeof_pointer);
+      if( strcmp(source.field->name, "ZEROES") == 0 )
+        {
+        // This is an extra-special corner case.  No, it's worse than a corner
+        // case.  It's a pointy case.  The caller is essentially setting the
+        // pointer to the figurative constant ZEROES.  But ZERO is both an
+        // alphanumeric and a numeric, depending on context.  Fine.  It's
+        // weird.  Let's just set the destination to zeroes, and be done with
+        // it.
+        gg_memset(qualified_data_location(tgts[i]),
+                  integer_zero_node,
+                  sizeof_pointer);
+        }
+      else
+        {
+        // This is something like SET varp TO ENTRY "ref".
+        tree function_pointer = function_pointer_from_name(source,
+                                                     COBOL_FUNCTION_RETURN_64);
+        gg_memcpy(qualified_data_location(tgts[i]),
+                  gg_get_address_of(function_pointer),
+                  sizeof_pointer);
+        }
       }
     else
       {
@@ -13729,6 +13976,7 @@ parser_program_hierarchy( const cbl_prog_hier_t& hier )
         {
         // We have a COMMON uncle or sibling we haven't seen before.
         map_of_lists[caller].push_back(uncle);
+        map_of_sets[caller].insert(uncle->name);
         }
       }
     }
@@ -13917,8 +14165,7 @@ parser_match_exception(cbl_field_t *index)
 
   TRACE1
     {
-    tree index_val;
-    get_binary_value(index_val, index, INT);
+    tree index_val = get_binary_value(index, INT);
     TRACE1_INDENT
     gg_printf("returned value is 0x%x (%d)", index_val, index_val, NULL_TREE);
     TRACE1_END
@@ -14129,7 +14376,7 @@ hijack_for_development(const char *funcname)
   hijacked = true;
   funcname = "main";
   // Assume that funcname is lowercase with no hyphens
-  gg_define_function(COBOL_FUNCTION_RETURN_TYPE,
+  gg_define_function(COBOL_FUNCTION_RETURN_64,
                      funcname,
                      funcname,
                      NULL_TREE);
@@ -14138,9 +14385,9 @@ hijack_for_development(const char *funcname)
   gg_insert_into_assemblerf("%s HIJACKED CODE START", ASM_COMMENT_START);
 
 
-  tree xxx = gg_define_int("xxx");
-  tree yyy = gg_define_int("yyy");
-  tree zzz = gg_define_int("zzz");
+  tree xxx = gg_define_variable(INT, "xxx");
+  tree yyy = gg_define_variable(INT, "yyy");
+  tree zzz = gg_define_variable(INT, "zzz");
 
   fprintf(stderr, "N is %d\n", N);
   for(int i=0; i<N; i++)
@@ -14313,7 +14560,7 @@ actually_create_the_static_field( cbl_field_t *new_var,
     }
   else if( new_var->type == FldClass )
     {
-    encoding = DEFAULT_32_ENCODING;
+    encoding = HOST_32_ENCODING;
     }
   else
     {
@@ -14333,7 +14580,14 @@ actually_create_the_static_field( cbl_field_t *new_var,
     }
   tree offset = build_int_cst_type(SIZE_T, new_var->offset);
   tree name = gg_string_literal(new_var->name);
-  tree picture = gg_string_literal(new_var->data.picture);
+
+  char *expanded = expand_picture(new_var->data.picture);
+  if( new_var->type == FldNumericEdited )
+    {
+    expand_expanded(expanded);
+    }
+  tree picture = gg_string_literal(expanded);
+  free(expanded);
   tree initial;
   if( length_of_initial_string == 0 || !new_var->data.has_initial_value() )
     {
@@ -14413,7 +14667,7 @@ psa_global(cbl_field_t *new_var)
       }
     }
 
-  new_var->var_decl_node = gg_declare_variable(cblc_field_type_node, ach, NULL, vs_external_reference);
+  new_var->var_decl_node = gg_declare_variable(cblc_field_type_node, ach, NULL, vs_extern);
 
   // global variables already have a .data area defined.  We can find that
   // variable from the new_var->name.  It's lower-case, with hyphens
@@ -14428,7 +14682,7 @@ psa_global(cbl_field_t *new_var)
       ach[i] = '_';
       }
     }
-  new_var->data_decl_node = gg_declare_variable(UCHAR, ach, NULL, vs_external_reference);
+  new_var->data_decl_node = gg_declare_variable(UCHAR, ach, NULL, vs_extern);
   }
 
 static tree
@@ -14446,7 +14700,7 @@ psa_new_var_decl(cbl_field_t *new_var, const char *external_record_base)
     strcat(ach, "_ra");  // For "Record Area"
     new_var_decl = gg_define_variable(  cblc_field_type_node,
                                         ach,
-                                        vs_external);
+                                        vs_weak);
     SET_DECL_MODE(new_var_decl, BLKmode);
     }
   else
@@ -14479,7 +14733,7 @@ psa_new_var_decl(cbl_field_t *new_var, const char *external_record_base)
     if( new_var->attr & external_e )
       {
       // For external variables, just stick with the original name
-      sprintf(base_name, "%s_cblc_field", new_var->name);
+      sprintf(base_name, "%s.cblc", new_var->name);
       }
     else
       {
@@ -14537,7 +14791,7 @@ psa_new_var_decl(cbl_field_t *new_var, const char *external_record_base)
       //fprintf(stderr, "external_e base name is %s\n", base_name);
       new_var_decl = gg_define_variable(  cblc_field_type_node,
                                           base_name,
-                                          vs_external);
+                                          vs_weak);
       SET_DECL_MODE(new_var_decl, BLKmode);
       }
     else if( new_var->attr & (intermediate_e)
@@ -14905,7 +15159,19 @@ parser_symbol_add(struct cbl_field_t *new_var )
                           "%<var_decl_node%>", __func__, new_var->name);
       }
 
-    switch( new_var->type ) // Trap_here for ordinary variables.
+    bool trap_here = !(new_var->attr & global_e) && !(new_var->attr & external_e) ;
+    if( trap_here )
+      {
+      /* This is a purely expedient construction for debugging.  We have a
+         couple of dozen boilerplate variables that get created for every
+         source-code module and program-id.  By skipping over global_e and
+         external_e variables, we get to the first user-defined variable, which
+         is often the one of interest when tracking down parsing in data
+         definitions. So it can be convenient to set a trap here.  */
+      trap_here = false;
+      }
+
+    switch( new_var->type )
       {
       static int counter=1;
       char ach[2*sizeof(cbl_name_t)];
@@ -14962,7 +15228,7 @@ parser_symbol_add(struct cbl_field_t *new_var )
         size_t converted_length;
         const char *converted = __gg__iconverter(
                                  new_var->codeset.default_encodings.source->type,
-                                 DEFAULT_32_ENCODING,
+                                 HOST_32_ENCODING,
                                  level_88_string,
                                  level_88_string_size,  // Convert the NUL
                                  &converted_length);
@@ -15118,7 +15384,7 @@ parser_symbol_add(struct cbl_field_t *new_var )
       new_var->data_decl_node = gg_define_variable(
                           array_type,
                           achDataName,
-                          vs_external);
+                          vs_common);
       data_area = gg_pointer_to_array(new_var->data_decl_node);
       goto actual_allocate;
       }
@@ -15223,7 +15489,7 @@ parser_symbol_add(struct cbl_field_t *new_var )
               new_var->data_decl_node = gg_define_variable(
                                   array_type,
                                   achDataName,
-                                  vs_external);
+                                  vs_common);
               data_area = gg_pointer_to_array(new_var->data_decl_node);
               }
             else
@@ -15267,7 +15533,7 @@ parser_symbol_add(struct cbl_field_t *new_var )
     free(level_88_string);
     free(class_string);
 
-    if(    !(new_var->attr & ( linkage_e | based_e))
+    if(    !(new_var->attr & ( linkage_e | based_e ))
         && !(new_var->type == FldLiteralN) )
       {
       static const bool explicitly = false;

@@ -902,18 +902,32 @@ fi
 
 AC_SUBST(DEFAULT_MATCHPD_PARTITIONS)
 
-# Specify the number of splits of insn-emit.cc and insn-recog.cc to generate.
+# Specify the number of output partitions used by the machine-description
+# generators.  Select and validate the effective value after config.gcc has
+# supplied the target default.
+md_generator_partitions_set=no
+md_generator_partitions_legacy=no
+AC_ARG_WITH(md-generator-partitions,
+[AS_HELP_STRING([--with-md-generator-partitions=num|emit:recog:attrtab],
+[Set the partition counts used by genemit, genrecog and genattrtab.
+A single number sets all three counts. [default=target dependent]])],
+[md_generator_partitions=$with_md_generator_partitions
+md_generator_partitions_set=yes])
 AC_ARG_WITH(insnemit-partitions,
-[AS_HELP_STRING([--with-insnemit-partitions=num],
-[Set the number of partitions of insn-emit.cc for genemit and genrecog to create. [default=10]])],
-[DEFAULT_INSNEMIT_PARTITIONS="$with_insnemit_partitions"], [DEFAULT_INSNEMIT_PARTITIONS=10])
-if (test $DEFAULT_INSNEMIT_PARTITIONS -lt 1); then
+[AS_HELP_STRING([--with-insnemit-partitions=num|emit:recog:attrtab],
+[Deprecated alias for --with-md-generator-partitions.])],
+[if test "$md_generator_partitions_set" = yes; then
   AC_MSG_ERROR(m4_normalize([
-		Invalid value $DEFAULT_INSNEMIT_PARTITIONS for --with-insnemit-partitions. \
-		Cannot be negative.]))
+		--with-md-generator-partitions and --with-insnemit-partitions \
+		cannot be used together.]))
 fi
+md_generator_partitions=$with_insnemit_partitions
+md_generator_partitions_set=yes
+md_generator_partitions_legacy=yes])
 
 AC_SUBST(DEFAULT_INSNEMIT_PARTITIONS)
+AC_SUBST(DEFAULT_INSNRECOG_PARTITIONS)
+AC_SUBST(DEFAULT_INSNATTRTAB_PARTITIONS)
 
 # Enable __cxa_atexit for C++.
 AC_ARG_ENABLE(__cxa_atexit,
@@ -1925,6 +1939,57 @@ target_gtfiles=
 
 # Collect target-machine-specific information.
 . ${srcdir}/config.gcc || exit 1
+
+# Use the target default unless the user specified an option.
+if test "$md_generator_partitions_set" = no; then
+  md_generator_partitions=$default_md_generator_partitions
+fi
+
+# Set all three counts here and let the loop below reject anything that is
+# empty, not a number, or out of range.  A value with too many fields leaves
+# its remainder in the last count, where the colon fails the same check.
+case "$md_generator_partitions" in
+  *:*:*)
+    IFS=: read -r DEFAULT_INSNEMIT_PARTITIONS DEFAULT_INSNRECOG_PARTITIONS \
+      DEFAULT_INSNATTRTAB_PARTITIONS <<EOF
+$md_generator_partitions
+EOF
+    ;;
+  *)
+    DEFAULT_INSNEMIT_PARTITIONS=$md_generator_partitions
+    DEFAULT_INSNRECOG_PARTITIONS=$md_generator_partitions
+    DEFAULT_INSNATTRTAB_PARTITIONS=$md_generator_partitions
+    ;;
+esac
+
+for generator_partitions in \
+  "$DEFAULT_INSNEMIT_PARTITIONS" \
+  "$DEFAULT_INSNRECOG_PARTITIONS" \
+  "$DEFAULT_INSNATTRTAB_PARTITIONS"; do
+  case "$generator_partitions" in
+    '' | *[[!0-9]]*) generator_partitions= ;;
+    *)
+      while test "${generator_partitions#0}" != "$generator_partitions"; do
+        generator_partitions=${generator_partitions#0}
+      done
+      case "$generator_partitions" in
+        '' | ?????*) generator_partitions= ;;
+      esac
+      ;;
+  esac
+  if test -z "$generator_partitions"; then
+    AC_MSG_ERROR(m4_normalize([
+		Invalid machine-description generator partition value \
+		$md_generator_partitions. \
+		Use N or E:R:A, with each number between 1 and 9999.]))
+  fi
+done
+
+if test "$md_generator_partitions_legacy" = yes; then
+  AC_MSG_WARN(m4_normalize([
+		--with-insnemit-partitions is deprecated. \
+		Use --with-md-generator-partitions instead.]))
+fi
 
 extra_objs="${host_extra_objs} ${extra_objs}"
 extra_gcc_objs="${host_extra_gcc_objs} ${extra_gcc_objs}"
@@ -3223,9 +3288,10 @@ Valid choices are 'yes' and 'no'.]) ;;
   esac],
  [enable_gnu_indirect_function="$default_gnu_indirect_function"])
 
+gcc_cv_irelative_reloc=
 case "${target}" in
   riscv*-*-linux*)
-    AC_MSG_CHECKING(linker ifunc IRELATIVE support)
+    gcc_cv_irelative_reloc=R_RISCV_IRELATIVE
     cat > conftest.s <<EOF
 	.text
 	.type	foo_resolver, @function
@@ -3244,19 +3310,46 @@ bar:
 	ret
 	.size	bar, .-bar
 EOF
-    if test x"$gcc_cv_as" != x \
-       && test x"$gcc_cv_ld" != x \
-       && test x"$gcc_cv_readelf" != x \
-       && $gcc_cv_as -o conftest.o conftest.s > /dev/null 2>&1 \
-       && $gcc_cv_ld -o conftest conftest.o > /dev/null 2>&1 \
-       && $gcc_cv_readelf --relocs --wide conftest \
-	  | grep R_RISCV_IRELATIVE > /dev/null 2>&1; then
-      enable_gnu_indirect_function=yes
-    fi
-    rm -f conftest conftest.o conftest.s
-    AC_MSG_RESULT($enable_gnu_indirect_function)
+    ;;
+  alpha*-*-linux*)
+    # Alpha gas reserves .set for setting assembler modes, so the alias is
+    # spelled with '=' instead, matching the target's ASM_OUTPUT_DEF.
+    gcc_cv_irelative_reloc=R_ALPHA_IRELATIVE
+    cat > conftest.s <<EOF
+	.text
+	.type	foo_resolver, @function
+foo_resolver:
+	ret
+	.size	foo_resolver, .-foo_resolver
+
+	.globl	foo
+	.type	foo, %gnu_indirect_function
+	foo = foo_resolver
+
+	.globl	bar
+	.type	bar, @function
+bar:
+	jsr	\$26, foo
+	ret
+	.size	bar, .-bar
+EOF
     ;;
 esac
+
+if test x"$gcc_cv_irelative_reloc" != x; then
+  AC_MSG_CHECKING(linker ifunc IRELATIVE support)
+  if test x"$gcc_cv_as" != x \
+     && test x"$gcc_cv_ld" != x \
+     && test x"$gcc_cv_readelf" != x \
+     && $gcc_cv_as -o conftest.o conftest.s > /dev/null 2>&1 \
+     && $gcc_cv_ld -o conftest conftest.o > /dev/null 2>&1 \
+     && $gcc_cv_readelf --relocs --wide conftest \
+	| grep $gcc_cv_irelative_reloc > /dev/null 2>&1; then
+    enable_gnu_indirect_function=yes
+  fi
+  rm -f conftest conftest.o conftest.s
+  AC_MSG_RESULT($enable_gnu_indirect_function)
+fi
 
 gif=`if test x$enable_gnu_indirect_function = xyes; then echo 1; else echo 0; fi`
 AC_DEFINE_UNQUOTED(HAVE_GNU_INDIRECT_FUNCTION, $gif,
@@ -3413,7 +3506,7 @@ if test $gcc_cv_as_hidden = yes && test $gcc_cv_ld_hidden = yes; then
   [Define if your assembler and linker support .hidden.])
 fi
 
-AC_MSG_CHECKING(linker supports GNU style respones files)
+AC_MSG_CHECKING(linker supports GNU style response files)
 gcc_cv_ld_at_file=no
 if test $in_tree_ld = yes ; then
   gcc_cv_ld_at_file=yes
@@ -3549,6 +3642,14 @@ gcc_GAS_CHECK_FEATURE([cfi directives], gcc_cv_as_cfi_directive,,
 	.cfi_escape 1, 2, 3, 4, 5
 	.cfi_endproc],
 [case "$target" in
+  hppa*-*-hpux*)
+    # The HP dynamic linker relocates text and data separately, so
+    # differences between text and data don't work.  As a result,
+    # gas defines CFI_DIFF_EXPR_OK to 0.  We want to use difference
+    # expressions for symbols in the data segment, so we need to
+    # make sure CFI directives aren't emitted.
+    gcc_cv_as_cfi_directive=no
+    ;;
   *-*-solaris*)
     # If the linker used on Solaris (like Sun ld) isn't capable of merging
     # read-only and read-write sections, we need to make sure that the
@@ -3771,7 +3872,7 @@ case "${target}" in
 esac
 AC_DEFINE_UNQUOTED(HAVE_GAS_SHF_GNU_RETAIN,
   [`if test $gcc_cv_as_shf_gnu_retain = yes; then echo 1; else echo 0; fi`],
-  [Define 0/1 if your assembler supports marking sections with SHF_GNU_RETAIN flag.])
+  [Define 0/1 if your assembler and linker support SHF_GNU_RETAIN.])
 
 # Test if the assembler supports the section flag 'o' for specifying
 # section with link-order.
@@ -3793,7 +3894,7 @@ case "${target}" in
 esac
 AC_DEFINE_UNQUOTED(HAVE_GAS_SECTION_LINK_ORDER,
   [`if test $gcc_cv_as_section_link_order = yes; then echo 1; else echo 0; fi`],
-  [Define 0/1 if your assembler supports 'o' flag in .section directive.])
+  [Define 0/1 if your assembler and linker support SHF_LINK_ORDER.])
 
 gcc_GAS_CHECK_FEATURE(section merging support, gcc_cv_as_shf_merge,
  [$fw_as_opt],
@@ -4219,23 +4320,6 @@ x:	.word 2
 	.text
 	la.tls.gd a0,x
         call __tls_get_addr'
-	;;
-  s390-*-*)
-    conftest_s='
-	.section ".tdata","awT",@progbits
-foo:	.long	25
-	.text
-	.long	foo@TLSGD
-	.long	foo@TLSLDM
-	.long	foo@DTPOFF
-	.long	foo@NTPOFF
-	.long	foo@GOTNTPOFF
-	.long	foo@INDNTPOFF
-	l	%r1,foo@GOTNTPOFF(%r12)
-	l	%r1,0(%r1):tls_load:foo
-	bas	%r14,0(%r1,%r13):tls_gdcall:foo
-	bas	%r14,0(%r1,%r13):tls_ldcall:foo'
-	tls_as_opt="-m31"
 	;;
   s390x-*-*)
     conftest_s='
@@ -4719,6 +4803,11 @@ AS_HELP_STRING([--disable-fix-cortex-a53-843419],
       		   ],,
       [AC_DEFINE(HAVE_AS_AVR_MGCCISR_OPTION, 1,
 		[Define if your avr assembler supports -mgcc-isr option.])])
+
+    gcc_GAS_CHECK_FEATURE([.gnu_attribute], gcc_cv_as_avr_gnu_attribute,
+      [], [.gnu_attribute 4,1],,
+      [AC_DEFINE(HAVE_AS_AVR_GNU_ATTRIBUTE, 1,
+		[Define if your avr assembler supports .gnu_attribute.])])
 
     avr_ld_ver="`$gcc_cv_ld -v | sed -e 's:^.* ::'`"
     # Check how default linker description file implements .rodata for
@@ -5545,7 +5634,7 @@ x:
       [AC_DEFINE(HAVE_AS_16B_ATOMIC, 1,
 	  [Define if your assembler supports LSX and SCQ for 16B atomic.])])
     ;;
-    s390*-*-*)
+    s390x-*-*)
     gcc_GAS_CHECK_FEATURE([.gnu_attribute support],
       gcc_cv_as_s390_gnu_attribute,,
       [.gnu_attribute 8,1],,
@@ -5921,7 +6010,7 @@ foo:
 	.file 1 \"foo.c\"
 	$insn
 	.file 2 \"foo.h\"
-	ret
+	$insn
 "
    dwarf4_success=no
    gcc_GAS_CHECK_FEATURE([--gdwarf-4 with the APP marker],
@@ -6952,14 +7041,14 @@ AS_IF([test x$gcc_cv_sys_sdt_h = xyes], [
 case "$target" in
   powerpc*-*-linux* | \
   sparc*-*-linux* | \
-  s390*-*-linux* | \
+  s390x-*-linux* | \
   alpha*-*-linux*)
     AC_ARG_WITH(long-double-128,
       [AS_HELP_STRING([--with-long-double-128],
 		      [use 128-bit long double by default])],
       gcc_cv_target_ldbl128="$with_long_double_128", [
       case "$target" in
-	s390*-*-linux-musl*)
+	s390x-*-linux-musl*)
 	  gcc_cv_target_ldbl128=yes
 	  ;;
 	powerpc*-*-linux-musl*)
@@ -7804,7 +7893,7 @@ AC_ARG_ENABLE(s390-excess-float-precision,
   [],[enable_s390_excess_float_precision=auto])
 
 case $target in
-  s390*-linux*)
+  s390x-linux*)
   if test x"$enable_s390_excess_float_precision" = xauto; then
     # Can we autodetect the behavior of the target libc?
     if test "$target" = "$host" -a "$host" = "$build"; then
@@ -7901,7 +7990,7 @@ if test x$PERF != xno; then
 	if test ! -n "$($PERF record -j any,u -o /dev/null /bin/true 2>&1 | grep "PMU Hardware or event type doesn't support branch stack sampling.")"; then
 	  AFDO_PROFILER=perf
 	  aarch64_spe_support="using BRBE instead"
-	elif test -n "$($PERF list | grep arm_spe)"; then
+	elif test -n "$($PERF list pmu | grep arm_spe)"; then
 	  AFDO_PROFILER=perf_spe
 	  aarch64_spe_support=yes
 	fi

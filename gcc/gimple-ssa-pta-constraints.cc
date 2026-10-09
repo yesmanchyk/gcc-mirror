@@ -29,7 +29,6 @@
 #include "tree-pass.h"
 #include "ssa.h"
 #include "cgraph.h"
-#include "tree-pretty-print.h"
 #include "diagnostic-core.h"
 #include "fold-const.h"
 #include "stor-layout.h"
@@ -2010,12 +2009,12 @@ find_func_aliases_for_builtin_call (struct function *fn, gcall *t)
 	    {
 	      fi = lookup_vi_for_tree (fn->decl);
 	      rhs = get_function_part_constraint (fi, ~0);
-	      rhs.type = ADDRESSOF;
+	      rhs.type = SCALAR;
 	    }
 	  else
 	    {
 	      rhs.var = nonlocal_id;
-	      rhs.type = ADDRESSOF;
+	      rhs.type = SCALAR;
 	      rhs.offset = 0;
 	    }
 	  FOR_EACH_VEC_ELT (lhsc, i, lhsp)
@@ -2108,6 +2107,21 @@ find_func_aliases_for_call (struct function *fn, gcall *t)
       && find_func_aliases_for_builtin_call (fn, t))
     return;
 
+  if (gimple_call_internal_p (t, IFN_VA_ARG)
+      && gimple_call_lhs (t))
+    {
+      tree valist = gimple_call_arg (t, 0);
+      auto_vec<ce_s, 1> rhsc, lhsc;
+      get_constraint_for_rhs (valist, &rhsc);
+      do_deref (&rhsc);
+      get_constraint_for (gimple_call_lhs (t), &lhsc);
+      process_all_all_constraints (lhsc, rhsc);
+      /* va_list is used and clobbered.  */
+      make_constraint_to (get_call_use_vi (t)->id, valist);
+      make_constraint_to (get_call_clobber_vi (t)->id, valist);
+      return;
+    }
+
   if (gimple_call_internal_p (t, IFN_DEFERRED_INIT))
     return;
 
@@ -2135,7 +2149,9 @@ find_func_aliases_for_call (struct function *fn, gcall *t)
 	 such operator, then the effects for PTA (in particular
 	 the escaping of the pointer) can be ignored.  */
       else if (fndecl
+	       && flag_assume_sane_operators_new_delete
 	       && DECL_IS_OPERATOR_DELETE_P (fndecl)
+	       && DECL_IS_REPLACEABLE_OPERATOR (fndecl)
 	       && gimple_call_from_new_or_delete (t))
 	;
       else

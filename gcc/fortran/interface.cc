@@ -1398,7 +1398,7 @@ gfc_check_dummy_characteristics (gfc_symbol *s1, gfc_symbol *s2,
 				 int err_len)
 {
   if (s1 == NULL || s2 == NULL)
-    return s1 == s2 ? true : false;
+    return s1 == s2;
 
   if (s1->attr.proc == PROC_ST_FUNCTION || s2->attr.proc == PROC_ST_FUNCTION)
     {
@@ -4269,21 +4269,24 @@ gfc_compare_actual_formal (gfc_actual_arglist **ap, gfc_formal_arglist *formal,
 	      {
 	      case INTENT_OUT:
 		{
-		  gfc_symbol *s = e->symtree->n.sym;
 		  gfc_expr_set_at (e, &e->where, VALUE_INTENT_OUT);
+		  if (f->sym->attr.allocatable)
+		    gfc_used_in_allocate_expr (e, &e->where, ALLOCATED_ARG);
 
-		  /* INTENT(OUT) allocates variables as far as we know.  */
-		  if (s->attr.allocatable)
-		    s->attr.allocated = 1;
 		}
 		break;
+
 	      case INTENT_IN:
 		gfc_value_used_expr (e, VALUE_INTENT_IN);
 		break;
+
 	      case INTENT_INOUT:
 	      case INTENT_UNKNOWN:
 		gfc_value_set_and_used (e, &e->where, VALUE_ARG,
 					VALUE_MAYBE_USED);
+
+		if (f->sym->attr.allocatable)
+		  gfc_used_in_allocate_expr (e, &e->where, ALLOCATED_ARG);
 		break;
 	      }
 	  }
@@ -4885,7 +4888,7 @@ find_symtree0 (gfc_symtree *root, gfc_symbol *sym)
 {
   gfc_symtree * st;
 
-  if (root->n.sym == sym)
+  if (root == NULL || root->n.sym == sym)
     return root;
 
   st = NULL;
@@ -4918,6 +4921,14 @@ gfc_find_sym_in_symtree (gfc_symbol *sym)
       st = find_symtree0 (ns->sym_root, sym);
       if (st)
 	return st;
+
+      /* Search user-defined operators.  */
+      if (ns->uop_root && sym->attr.function)
+	{
+	  st = find_symtree0 (ns->uop_root, sym);
+	  if (st)
+	    return st;
+	}
     }
   gfc_internal_error ("Unable to find symbol %qs", sym->name);
   /* Not reached.  */

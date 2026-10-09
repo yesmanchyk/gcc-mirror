@@ -22,6 +22,14 @@ along with GCC; see the file COPYING3.  If not see
 #ifndef GCC_SYSTEM_H
 #define GCC_SYSTEM_H
 
+/* True if __builtin_* () is supported.
+   This is done for optimizing GCC itself.  */
+#ifdef __has_builtin
+# define STAGE0_CXX_HAS_BUILTIN(NAME) __has_builtin (__builtin_ ## NAME)
+#else
+# define STAGE0_CXX_HAS_BUILTIN(NAME) 0
+#endif
+
 /* Define this so that inttypes.h defines the PRI?64 macros even
    when compiling with a C++ compiler.  Define it here so in the
    event inttypes.h gets pulled in by another header it is already
@@ -227,6 +235,9 @@ extern int fprintf_unlocked (FILE *, const char *, ...);
 #endif
 #ifdef INCLUDE_SSTREAM
 # include <sstream>
+#endif
+#ifdef INCLUDE_ITERATOR
+# include <iterator>
 #endif
 # include <memory>
 # include <cstring>
@@ -601,15 +612,6 @@ extern int vsnprintf (char *, size_t, const char *, va_list);
 #define HAVE_DESIGNATED_INITIALIZERS 0
 #else
 #define HAVE_DESIGNATED_INITIALIZERS \
-  ((GCC_VERSION >= 2007) || (__STDC_VERSION__ >= 199901L))
-#endif
-#endif
-
-#if !defined(HAVE_DESIGNATED_UNION_INITIALIZERS)
-#ifdef __cplusplus
-#define HAVE_DESIGNATED_UNION_INITIALIZERS (GCC_VERSION >= 4007)
-#else
-#define HAVE_DESIGNATED_UNION_INITIALIZERS \
   ((GCC_VERSION >= 2007) || (__STDC_VERSION__ >= 199901L))
 #endif
 #endif
@@ -1115,7 +1117,8 @@ extern void fancy_abort (const char *, int, const char *)
    LIBGCC2_FLOAT_WORDS_BIG_ENDIAN
 
 /* Miscellaneous macros that are no longer used.  */
- #pragma GCC poison USE_MAPPED_LOCATION GET_ENVIRONMENT
+ #pragma GCC poison USE_MAPPED_LOCATION GET_ENVIRONMENT \
+  HAVE_DESIGNATED_UNION_INITIALIZERS
 
 /* Libiberty macros that are no longer used in GCC.  */
 #undef ANSI_PROTOTYPES

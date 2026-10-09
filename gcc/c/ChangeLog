@@ -1,3 +1,97 @@
+2026-09-22  Chung-Lin Tang  <cltang@baylibre.com>
+
+	* c-parser.cc (c_parser_omp_clause_name): Add "local" case.
+	(c_parser_omp_all_clauses): Add PRAGMA_OMP_CLAUSE_LOCAL case.
+	(OMP_DECLARE_TARGET_CLAUSE_MASK): Add PRAGMA_OMP_CLAUSE_LOCAL.
+	( c_parser_omp_declare_target): Handle OMP_CLAUSE_LOCAL.
+	* c-typeck.cc (c_finish_omp_clauses): Handle OMP_CLAUSE_LOCAL.
+	Emit error if local clause variable appears in map clause.
+
+2026-09-21  Jakub Jelinek  <jakub@redhat.com>
+
+	* c-decl.cc (names_builtin_p): Return 1 for
+	RID_BUILTIN_BITREVERSEG and RID_BUILTIN_BSWAPG.
+
+2026-09-16  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c/127383
+	* c-typeck.cc (default_conversion): If orig_expr is different
+	from exp and exp is a bit-field of bit-precise integer type, call
+	perform_integral_promotions on orig_exp rather than exp.
+	(build_c_cast): Wrap in NON_LVALUE_EXPR not just lvalues, but
+	also non-lvalue bit-fields of bit-precise integer type.
+
+2026-09-11  Richard Biener  <rguenther@suse.de>
+
+	* gimple-parser.cc (c_parser_gimple_statement): Parse
+	but ignore {v} marker on assignments.
+
+2026-09-11  Richard Biener  <rguenther@suse.de>
+
+	* gimple-parser.cc (c_parser_gimple_postfix_expression):
+	Add ret_type argument, defaulted to error_mark_node.
+	Add parsing of __CLOBBER.
+	(c_parser_gimple_binary_expression): Pass ret_type down to
+	c_parser_gimple_postfix_expression.
+
+2026-09-08  Kael Andrew Alonzo Franco  <kaelfandrew@gmail.com>
+
+	PR middle-end/126622
+	* c-parser.cc (c_parser_omp_for_loop): Use
+	build_int_cst (integer_type_node, cst).
+
+2026-08-14  Martin Uecker  <uecker@tugraz.at>
+
+	PR c/126284
+	* c-typeck.cc (top_array_vla_p): Remove check.
+
+2026-08-09  Andrea Pinski  <andrew.pinski@oss.qualcomm.com>
+
+	* gimple-parser.cc (c_parser_gimple_postfix_expression):
+	Allow for an optional `, 1/0` in front of the cb pair
+	for MEM_REF.
+
+2026-07-25  Kael Andrew Alonzo Franco  <kaelfandrew@gmail.com>
+
+	PR middle-end/125507
+	* c-parser.h (struct c_token): Remove ENUM_BITFIELD.
+	* c-tree.h (struct c_declspecs): Ditto.
+
+2026-07-15  Tobias Burnus  <tburnus@baylibre.com>
+
+	PR c/122748
+	* c-parser.cc (c_parser_omp_clause_allocate): Avoid ICE
+	when allocator is an error_mark_node.
+	(c_parser_omp_clause_uses_allocators): Mark trait var
+	as read to avoid 'unused but set' warning.
+
+2026-07-08  Martin Uecker  <uecker@tugraz.at>
+
+	* c-tree.h (zero_length_array_type_p,
+	c_build_array_type_zero_size) Add prototypes.
+	* c-decl.cc (zero_length_array_type_p): External linkage.
+	(c_build_array_type_zero_size): New.
+	(grokdeclarator): Use new function.
+	* c-typeck.cc (c_verify_type): New consistency checks.
+	(c_build_array_type_zero_size): New function
+	(composite_type_internal): Refactor.
+	(comptypes_internal): Refactor.
+
+2026-07-08  Martin Uecker  <uecker@tugraz.at>
+
+	* c-decl.cc (grokdeclarator): Add assertion.
+	(add_flexible_array_elts_to_size): Adapt.
+	(is_flexible_array_member_p): Adapt.
+	(verify_counted_by_attribute): Adapt.
+	(finish_struct): Adapt.
+	* c-typeck.cc (check_counted_by_attribute): Adapt.
+	(build_counted_by_ref): Adapt.
+	(build_access_with_size_for_counted_by): Adapt.
+	(handle_counted_by_for_component_ref): Adapt.
+	(c_incomplete_type_error): Use new helper function.
+	(digest_init): Use new helper function.
+	(pop_init_level): Use new helper function.
+
 2026-06-30  Chung-Lin Tang  <cltang@baylibre.com>
 
 	* c-typeck.cc (c_finish_omp_clauses): Fix comments.
